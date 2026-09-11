@@ -1,0 +1,93 @@
+import { actions } from '@cutgraph/shared';
+import {
+  Background,
+  Controls,
+  ReactFlow,
+  ReactFlowProvider,
+  useEdgesState,
+  useNodesState,
+  type Connection,
+  type Edge,
+  type EdgeChange,
+  type NodeChange,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import { useCallback } from 'react';
+import { useGraph } from '../state/graphContext';
+import { nodeTypes } from './nodeTypes';
+import type { CutgraphNode } from './types';
+import { useSyncNodeData } from './useSyncNodeData';
+
+function FlowCanvasInner() {
+  const { graph, dispatch } = useGraph();
+  const [nodes, setNodes, onNodesChangeInternal] = useNodesState<CutgraphNode>([]);
+  const [edges, setEdges, onEdgesChangeInternal] = useEdgesState<Edge>([]);
+
+  useSyncNodeData(graph);
+
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<CutgraphNode>[]) => {
+      onNodesChangeInternal(changes);
+      for (const change of changes) {
+        if (change.type === 'position' && change.position && change.dragging === false) {
+          dispatch(actions.nodeMoved(change.id, change.position));
+        } else if (change.type === 'remove') {
+          dispatch(actions.nodeRemoved(change.id));
+        }
+      }
+    },
+    [onNodesChangeInternal, dispatch],
+  );
+
+  const handleEdgesChange = useCallback(
+    (changes: EdgeChange<Edge>[]) => {
+      onEdgesChangeInternal(changes);
+      for (const change of changes) {
+        if (change.type === 'remove') dispatch(actions.edgeRemoved(change.id));
+      }
+    },
+    [onEdgesChangeInternal, dispatch],
+  );
+
+  const handleConnect = useCallback(
+    (connection: Connection) => {
+      if (!connection.source || !connection.target) return;
+      const id = `${connection.source}:${connection.sourceHandle ?? 'out'}->${connection.target}:${connection.targetHandle ?? 'in'}`;
+      dispatch(
+        actions.edgeAdded({
+          id,
+          source: connection.source,
+          target: connection.target,
+          sourceHandle: connection.sourceHandle,
+          targetHandle: connection.targetHandle,
+        }),
+      );
+    },
+    [dispatch],
+  );
+
+  return (
+    <div style={{ width: '100%', height: '100%' }}>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        onNodesChange={handleNodesChange}
+        onEdgesChange={handleEdgesChange}
+        onConnect={handleConnect}
+        fitView
+      >
+        <Background />
+        <Controls />
+      </ReactFlow>
+    </div>
+  );
+}
+
+export function FlowCanvas() {
+  return (
+    <ReactFlowProvider>
+      <FlowCanvasInner />
+    </ReactFlowProvider>
+  );
+}

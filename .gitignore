@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+apps/server/fixtures/**/*.png
+apps/server/fixtures/**/*.jpg
+apps/server/fixtures/**/*.mp4
+apps/server/uploads/**
+!apps/server/uploads/.gitkeep
