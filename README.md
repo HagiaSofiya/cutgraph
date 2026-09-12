@@ -4,7 +4,7 @@ A node-based editor for generative video workflows: a small DAG canvas, in the s
 ComfyUI, but for generative clips. Build a graph of image/video generation and editing steps,
 run it and watch each node's status stream in live.
 
-![A Text to Image node in Cutgraph, showing a prompt, ratio and a succeeded generation](docs/screenshot.png)
+![A Cutgraph pipeline: Text to Image feeding two Image to Video nodes, concatenated and exported, all succeeded](docs/screenshot.png)
 
 Generation nodes run behind one swappable adapter interface. By default the server runs in
 *fixture mode*: no real generation API is called, nodes resolve to local canned clips after a
