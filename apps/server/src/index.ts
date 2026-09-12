@@ -58,7 +58,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   const uploadStore = new UploadStore(config.uploadsDir, `${config.publicOrigin}/uploads`);
   const { adapter, active, models } = createAdapter(config, uploadStore);
   const isRunway = active === 'runway';
-  const jobRunner = new JobRunner(jobStore, adapter);
+  const jobRunner = new JobRunner(jobStore, adapter, config.jobTimeoutMs);
 
   // Spend limits only bite for the paid adapter -- fixture mode (the deployed demo, and every
   // existing test) stays unlimited.
@@ -83,7 +83,7 @@ export function createApp(config: AppConfig = loadConfig()) {
     '/api/health',
     createHealthRoute({ requested: config.adapter ?? 'fixture', active, models }, spendGuard),
   );
-  app.route('/api/jobs', createJobsRoute(jobRunner, jobStore, spendGuard));
+  app.route('/api/jobs', createJobsRoute(jobRunner, spendGuard));
   app.route('/api/jobs', createEventsRoute(jobStore));
   app.route('/api/uploads', createUploadsRoute(uploadStore));
   app.route('/fixtures', createStaticRoute(config.fixturesDir, '/fixtures'));

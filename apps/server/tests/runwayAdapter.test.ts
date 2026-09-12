@@ -255,4 +255,38 @@ describe('RunwayGenerationAdapter', () => {
       expect.objectContaining({ model: 'gen4_turbo', duration: 5, ratio: '1280:720' }),
     );
   });
+
+  it('cancels the accepted Runway task, so a stopped generation stops billing', async () => {
+    const deleteTask = vi.fn().mockResolvedValue(undefined);
+    // A task Runway accepts but that never produces output -- i.e. still in flight when the
+    // user presses Stop.
+    const create = vi.fn().mockReturnValue(
+      fakeTask({ id: 'task_9', estimatedCost: { credits: 1 } }, () => new Promise<never>(() => {})),
+    );
+    const client = {
+      textToImage: { create },
+      imageToVideo: { create: vi.fn() },
+      tasks: { delete: deleteTask },
+    } as unknown as RunwayML;
+    const adapter = new RunwayGenerationAdapter(client, uploadStore, uploadsDir, PUBLIC_ORIGIN);
+
+    void adapter.generate(textToImageRequest());
+    await new Promise((r) => setTimeout(r, 0)); // let the create resolve and record the task id
+
+    await adapter.cancel('job-1');
+    expect(deleteTask).toHaveBeenCalledWith('task_9');
+  });
+
+  it('does nothing when cancelling a job Runway never accepted', async () => {
+    const deleteTask = vi.fn();
+    const client = {
+      textToImage: { create: vi.fn() },
+      imageToVideo: { create: vi.fn() },
+      tasks: { delete: deleteTask },
+    } as unknown as RunwayML;
+    const adapter = new RunwayGenerationAdapter(client, uploadStore, uploadsDir, PUBLIC_ORIGIN);
+
+    await adapter.cancel('job-never-started');
+    expect(deleteTask).not.toHaveBeenCalled();
+  });
 });

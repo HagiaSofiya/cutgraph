@@ -394,4 +394,50 @@ describe('runGraph', () => {
     expect(finalGraph.nodes.plain.error?.code).toBeUndefined();
     expect(finalGraph.nodes.plain.error?.message).toBe('a plain local failure');
   });
+
+  it('stops starting nodes once the run is aborted, and leaves the rest untouched', async () => {
+    // a -> b: aborting while 'a' is in flight must leave 'b' unstarted.
+    const graph = makeGraph(
+      [makeNode({ id: 'a', type: 'imageInput' }), makeNode({ id: 'b', type: 'trim', params: { start: 0, end: 1 } })],
+      [makeEdge({ id: 'ab', source: 'a', target: 'b' })],
+    );
+
+    const { executor, started, finish } = deferredExecutor();
+    const harness = createHarness(graph);
+    const controller = new AbortController();
+    const run = createRunGraph();
+    const runPromise = run(['b'], {
+      getGraph: harness.getGraph,
+      dispatch: harness.dispatch,
+      executors: everyNodeType(executor),
+      signal: controller.signal,
+    });
+
+    await flush();
+    expect(started).toEqual(['a']);
+
+    controller.abort();
+    finish('a'); // 'a' was already past the point of no return and completes normally
+    await runPromise;
+
+    expect(started).toEqual(['a']); // 'b' never started
+    expect(harness.getGraph().nodes.b.status).toBe('idle');
+  });
+
+  it('starts nothing at all when the signal is already aborted', async () => {
+    const graph = makeGraph([makeNode({ id: 'a', type: 'imageInput' })]);
+    const { executor, started } = deferredExecutor();
+    const harness = createHarness(graph);
+
+    const run = createRunGraph();
+    await run(['a'], {
+      getGraph: harness.getGraph,
+      dispatch: harness.dispatch,
+      executors: everyNodeType(executor),
+      signal: AbortSignal.abort(),
+    });
+
+    expect(started).toEqual([]);
+    expect(harness.getGraph().nodes.a.status).toBe('idle');
+  });
 });

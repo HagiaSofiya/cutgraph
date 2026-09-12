@@ -22,6 +22,9 @@ export interface RunGraphDeps {
   dispatch: Dispatch<GraphAction>;
   executors: Record<NodeType, Executor>;
   maxConcurrency?: number;
+  // Aborting stops the run from starting anything further and asks in-flight generation jobs to
+  // cancel. Nodes already past the point of no return (a mediabunny encode) still finish.
+  signal?: AbortSignal;
 }
 
 interface ResolvedUpstream {
@@ -104,6 +107,10 @@ async function executeNode(
   limit: Limiter,
   inFlightByCacheKey: Map<string, Promise<MediaRef>>,
 ): Promise<void> {
+  // Checked here rather than only at the top of the run: a node that has been waiting on an
+  // upstream (or for a concurrency slot) must not start after the user pressed Stop.
+  if (deps.signal?.aborted) return;
+
   const graph = deps.getGraph();
   const node = graph.nodes[nodeId];
   if (!node) return;
@@ -145,7 +152,9 @@ async function executeNode(
     deps.dispatch(actions.nodeRunning(nodeId, cacheKey));
   } else {
     const executor = deps.executors[node.type];
-    work = limit(() => executor.run({ node, upstream: resolved.refs, cacheKey, dispatch: deps.dispatch }));
+    work = limit(() =>
+      executor.run({ node, upstream: resolved.refs, cacheKey, dispatch: deps.dispatch, signal: deps.signal }),
+    );
     // Set synchronously -- no await between the get above and this, so siblings can't both miss.
     if (sharedKey) inFlightByCacheKey.set(sharedKey, work);
   }

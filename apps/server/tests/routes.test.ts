@@ -145,3 +145,37 @@ describe('POST /api/uploads', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('DELETE /api/jobs/:id', () => {
+  it('reports canceled:false for a job that does not exist', async () => {
+    const res = await app.request('/api/jobs/no-such-job', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ canceled: false });
+  });
+
+  it('cancels an in-flight job and leaves it failed with a CANCELED code', async () => {
+    const created = await app.request('/api/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeType: 'textToImage',
+        params: { prompt: 'a cat', ratio: '1:1' },
+        inputs: [],
+        cacheKey: 'cancel-key',
+      }),
+    });
+    const { jobId } = await created.json();
+
+    const canceled = await app.request(`/api/jobs/${jobId}`, { method: 'DELETE' });
+    expect(await canceled.json()).toEqual({ canceled: true });
+
+    const status = await app.request(`/api/jobs/${jobId}`);
+    const body = await status.json();
+    expect(body.status).toBe('failed');
+    expect(body.error.code).toBe('CANCELED');
+
+    // Cancelling again is a no-op, not a second terminal transition.
+    const again = await app.request(`/api/jobs/${jobId}`, { method: 'DELETE' });
+    expect(await again.json()).toEqual({ canceled: false });
+  });
+});

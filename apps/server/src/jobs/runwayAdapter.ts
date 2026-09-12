@@ -41,6 +41,11 @@ const LOCAL_UPLOAD_FILENAME = /^[0-9a-f]{64}\.(png|jpe?g|webp)$/i;
 // resolvePromptImage), and persisting outputs before Runway's own URLs expire in 24-48h (see
 // storeOutput).
 export class RunwayGenerationAdapter implements GenerationAdapter {
+  // Populated the moment Runway accepts a task and cleared when the job settles. This is the
+  // only handle on the remote work, and without it a canceled job would keep generating (and
+  // billing) to completion.
+  private readonly taskIdByJobId = new Map<string, string>();
+
   constructor(
     private readonly client: RunwayML,
     private readonly uploadStore: UploadStore,
@@ -57,7 +62,18 @@ export class RunwayGenerationAdapter implements GenerationAdapter {
       return { ok: true, result };
     } catch (err) {
       return { ok: false, error: mapRunwayError(err) };
+    } finally {
+      this.taskIdByJobId.delete(request.jobId);
     }
+  }
+
+  // Runway's tasks.delete cancels a task that is still running, pending or throttled (and
+  // deletes it otherwise), which is what actually stops a canceled generation from billing.
+  // A job with no recorded task id was canceled before Runway accepted it -- nothing to stop.
+  async cancel(jobId: string): Promise<void> {
+    const taskId = this.taskIdByJobId.get(jobId);
+    if (!taskId) return;
+    await this.client.tasks.delete(taskId);
   }
 
   private async generateImage(request: GenerateRequest, hooks?: GenerateHooks) {
@@ -70,7 +86,8 @@ export class RunwayGenerationAdapter implements GenerationAdapter {
       model === 'gen4_image'
         ? this.client.textToImage.create({ model, promptText: params.prompt, ratio: mapGen4ImageRatio(params.ratio) })
         : this.client.textToImage.create({ model, promptText: params.prompt, ratio: mapGrokImageRatio(params.ratio) });
-    await task; // task accepted server-side; distinct from waitForTaskOutput's polling below
+    // task accepted server-side; distinct from waitForTaskOutput's polling below
+    this.taskIdByJobId.set(request.jobId, (await task).id);
     hooks?.onRunning?.();
     const output = await task.waitForTaskOutput();
 
@@ -93,7 +110,7 @@ export class RunwayGenerationAdapter implements GenerationAdapter {
       model === 'gen4.5'
         ? this.client.imageToVideo.create({ model, promptImage, promptText: params.prompt, ratio, duration })
         : this.client.imageToVideo.create({ model, promptImage, promptText: params.prompt, ratio, duration });
-    await task;
+    this.taskIdByJobId.set(request.jobId, (await task).id);
     hooks?.onRunning?.();
     const output = await task.waitForTaskOutput();
 

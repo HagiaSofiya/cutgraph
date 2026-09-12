@@ -1,10 +1,9 @@
 import { CreateJobRequestSchema, NodeParamsSchemaByType } from '@cutgraph/shared';
 import { Hono } from 'hono';
 import type { JobRunner } from '../jobs/jobRunner';
-import type { JobStore } from '../jobs/jobStore';
 import type { SpendGuard } from '../jobs/spendGuard';
 
-export function createJobsRoute(runner: JobRunner, jobStore: JobStore, spendGuard: SpendGuard): Hono {
+export function createJobsRoute(runner: JobRunner, spendGuard: SpendGuard): Hono {
   const app = new Hono();
 
   app.post('/', async (c) => {
@@ -27,15 +26,21 @@ export function createJobsRoute(runner: JobRunner, jobStore: JobStore, spendGuar
       return c.json({ error: { message: reservation.reason, code: 'SPEND_LIMIT' } }, 429);
     }
 
-    const { jobId, createdAt } = runner.create(nodeType, parsedParams.data, inputs, cacheKey);
-    const unsubscribe = jobStore.subscribe(jobId, (event) => {
-      if (event.event === 'job.succeeded' || event.event === 'job.failed') {
-        spendGuard.release();
-        unsubscribe();
-      }
-    });
+    // Releasing on the adapter settling (rather than on a terminal SSE event) is what makes the
+    // slot recoverable: JobRunner's timeout guarantees the adapter settles, and a cancel frees
+    // the slot without waiting for it.
+    const { jobId, createdAt } = runner.create(nodeType, parsedParams.data, inputs, cacheKey, () =>
+      spendGuard.release(),
+    );
 
     return c.json({ jobId, status: 'queued', cacheKey, createdAt }, 202);
+  });
+
+  app.delete('/:id', async (c) => {
+    const canceled = await runner.cancel(c.req.param('id'));
+    // Already finished (or never existed) is not an error: the caller wanted it stopped, and it
+    // is stopped. Reported honestly so the client can tell a real cancel from a no-op.
+    return c.json({ canceled });
   });
 
   app.get('/:id', (c) => {

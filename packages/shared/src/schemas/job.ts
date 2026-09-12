@@ -90,4 +90,10 @@ export interface GenerationAdapter {
   // Must resolve, never throw, for expected/simulated failures -- keeps jobRunner's control
   // flow identical between the fixture adapter and a future real one.
   generate(request: GenerateRequest, hooks?: GenerateHooks): Promise<GenerateResult>;
+
+  // Stop the remote work for a job that is still in flight, if this adapter has remote work to
+  // stop. Optional because there is nothing meaningful to cancel in fixture mode -- a simulated
+  // sleep costs nothing and the job is marked CANCELED by the runner either way. For a paid
+  // adapter this is what stops an in-flight generation from billing to completion.
+  cancel?(jobId: string): Promise<void>;
 }

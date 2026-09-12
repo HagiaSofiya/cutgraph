@@ -40,8 +40,8 @@ Open `http://localhost:5173`, add a few nodes from the toolbar, connect them and
 | Node | Params | Executes | Result |
 |---|---|---|---|
 | Image Input | none (upload) | client-side (uploads to the server) | persistent |
-| Text to Image | `prompt`, `ratio` | backend job (SSE) | persistent |
-| Image to Video | `prompt`, `duration`, `ratio` | backend job (SSE) | persistent |
+| Text to Image | `prompt`, `ratio`, `model` | backend job (SSE) | persistent |
+| Image to Video | `prompt`, `duration`, `ratio`, `model` | backend job (SSE) | persistent |
 | Trim | `start`, `end` | client-side (mediabunny) | ephemeral |
 | Concat | up to 4 ordered inputs | client-side (mediabunny) | ephemeral |
 | Export | `filename` | client-side (mediabunny, triggers a download) | ephemeral |
@@ -113,6 +113,27 @@ are plain, framework-agnostic TypeScript, independently unit-tested without touc
   free. A failed node keeps its last-succeeded result and retries independently via
   `retryNode`, which does **not** cascade into that node's stale descendants, so a retry can't
   silently trigger several downstream paid generations.
+- **Failure codes, not just messages.** A generation failure carries a `FailureCode`
+  (`packages/shared/src/types/index.ts`) from the adapter all the way to the node. The
+  distinction that matters is whether retrying the node unchanged can possibly work: a
+  `RATE_LIMIT` or `TIMEOUT` says yes, a `MODERATION` or `AUTH` says no, and before this they
+  arrived as identical red text under an identical Retry button. The canvas turns the code into a
+  hint and relabels the button "Retry anyway" when retrying is not the useful next step.
+- **The canvas can tell which adapter is running.** `/api/health` reports the adapter actually
+  serving generations, not the one that was configured, plus the models it can run and how much
+  of the per-process spend budget is gone. Those differ exactly when `CUTGRAPH_ADAPTER=runway` is
+  set without a usable key: the server falls back to fixtures, which used to be visible only as a
+  `console.warn` in the server's own terminal, leaving "watching canned clips" and "spending real
+  credits" indistinguishable on the canvas. `AdapterBadge.tsx` renders that as a toolbar chip.
+- **Stopping a run actually stops it.** Run hands `runGraph` an `AbortSignal`; Stop aborts it, so
+  no further node starts and every in-flight generation job is cancelled through
+  `DELETE /api/jobs/:id`, which calls Runway's own `tasks.delete` -- otherwise a stopped run keeps
+  generating, and billing, to completion. Client-side (mediabunny) nodes cannot interrupt an
+  encode already in progress, so for them the signal only prevents work that has not started.
+- **A job always settles.** `JobRunner` races every `adapter.generate()` against
+  `CUTGRAPH_JOB_TIMEOUT_MS`. This is what makes the spend guard's concurrency slot recoverable:
+  the slot is released when the adapter settles (or the job is cancelled), and before the timeout
+  existed an adapter that hung held its slot for the life of the process.
 - **Streaming status.** The backend only orchestrates the two generation node types as jobs;
   `apps/server/src/sse/sseHub.ts` buffers each job's last 3 events and replays them on
   (re)connect, via the `Last-Event-ID` header on the browser's own automatic reconnect or a
@@ -156,6 +177,7 @@ Env vars for `apps/server` (all optional):
 | `CUTGRAPH_SIM_MIN_PROCESSING_MS` / `_MAX_PROCESSING_MS` | 1500 / 4000 | simulated generation time (fixture only) |
 | `CUTGRAPH_SIM_FAILURE_RATE` | 0.15 | probability a job fails (fixture only) |
 | `CUTGRAPH_JOB_RETENTION_MS` | 600000 | how long a finished job stays queryable |
+| `CUTGRAPH_JOB_TIMEOUT_MS` | 600000 | wall-clock cap on one generation before it fails as `TIMEOUT` |
 | `PORT` | 8787 | server port |
 | `CUTGRAPH_PUBLIC_ORIGIN` | `http://localhost:<PORT>` | base URL used to build fixture/upload/output links |
 | `CUTGRAPH_RUNWAY_API_KEY` | none | Runway Dev API key, server-side only, never sent to the browser |
@@ -169,16 +191,24 @@ Env vars for `apps/server` (all optional):
 `CUTGRAPH_RUNWAY_API_KEY` logs a loud warning and falls back to fixture mode rather than
 crashing the server.
 
-- **Models.** Text to Image uses `gen4_image`; Image to Video uses `gen4.5`. Both were chosen to
-  fit our schemas as-is (prompt-only text-to-image with no reference images; single-image,
-  prompt + duration + ratio image-to-video) rather than for being the newest or cheapest option.
+- **Models.** Selectable per node: Text to Image runs `gen4_image` or `grok_imagine_image_2`,
+  Image to Video runs `gen4.5` or `gen4_turbo`. Two each rather than Runway's full catalog because
+  every model is a distinct SDK param variant with its own ratio literals and duration rules, and
+  an unverified mapping is a 400 at generation time rather than a compile error. `gen4_image_turbo`
+  looks like the obvious `gen4_image` sibling and is deliberately excluded: it *requires* reference
+  images, which this node type does not have. The model is part of the node's params, so switching
+  it invalidates that node's cache key and everything downstream for free.
 - **Ratio mapping.** Our four ratios (`1:1`, `16:9`, `9:16`, `4:3`) map to explicit pixel-pair
-  strings, verified against the SDK's own literal types rather than assumed
-  (`apps/server/src/jobs/runwayParams.ts`). Three of four are exact matches for both models;
-  `4:3` on Image to Video has no exact pixel pair in gen4.5's ratio set and uses the nearest
-  available (`1104:832`, ~0.5% off true 4:3) as a documented approximation.
+  strings per model, verified against the SDK's own literal types rather than assumed
+  (`apps/server/src/jobs/runwayParams.ts`). Both text-to-image models match all four exactly.
+  `gen4.5` and `gen4_turbo` accept an identical six-value ratio set, in which `4:3` has no exact
+  pixel pair and uses the nearest available (`1104:832`, ~0.5% off true 4:3) as a documented
+  approximation.
 - **Duration.** gen4.5 accepts an integer from 2 to 10, matching our schema's existing range;
-  fractional input is rounded to the nearest integer, not truncated.
+  fractional input is rounded to the nearest integer, not truncated. `gen4_turbo` is typed by the
+  SDK as taking a bare `number`, so nothing would catch an out-of-range value at compile time --
+  its duration is snapped to the two lengths that model documents (5 or 10), the same way the 4:3
+  ratio above prefers a documented near-miss over a silent guess.
 - **Input reachability.** Runway fetches input images server-side, so a `http://localhost/...`
   upload URL is unreachable to it. A URL under our own uploads is read straight off disk and
   sent as a base64 data URI instead (capped at Runway's ~3.5MB raw limit, refused with a clear
@@ -190,6 +220,10 @@ crashing the server.
 - **Failure taxonomy.** Content moderation rejections, task failures, rate limits, timeouts and
   auth/billing errors are mapped to distinct, actionable messages
   (`apps/server/src/jobs/runwayErrors.ts`).
+- **Cancellation.** `DELETE /api/jobs/:id` calls the SDK's `tasks.delete`, which cancels a task
+  that is still running, pending or throttled. The adapter records each accepted task id against
+  its job id so there is something to cancel; a job cancelled before Runway accepted it has no
+  remote work to stop and is simply marked `CANCELED`.
 - **Spend guard.** `POST /api/jobs` rejects with 429 once either per-process limit is hit,
   before a job is ever queued. Only active when the runway adapter is actually selected; fixture
   mode (and every existing test) is unaffected.
@@ -197,7 +231,7 @@ crashing the server.
 ## Testing
 
 ```bash
-npm test          # 154 tests across all three packages
+npm test          # 184 tests across all three packages
 npm run typecheck
 ```
 

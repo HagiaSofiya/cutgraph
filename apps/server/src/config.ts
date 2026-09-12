@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import type { AdapterKind } from '@cutgraph/shared';
+import { DEFAULT_JOB_TIMEOUT_MS } from './jobs/jobRunner';
 
 export interface SimConfig {
   minLatencyMs: number;
@@ -19,6 +20,7 @@ export interface SpendGuardConfig {
 export interface AppConfig {
   sim: SimConfig;
   jobRetentionMs: number;
+  jobTimeoutMs?: number;
   port: number;
   publicOrigin: string;
   fixturesDir: string;
@@ -56,6 +58,7 @@ export function loadConfig(): AppConfig {
       failureRate: envNumber('CUTGRAPH_SIM_FAILURE_RATE', 0.15),
     },
     jobRetentionMs: envNumber('CUTGRAPH_JOB_RETENTION_MS', 600_000),
+    jobTimeoutMs: envNumber('CUTGRAPH_JOB_TIMEOUT_MS', DEFAULT_JOB_TIMEOUT_MS),
     port,
     publicOrigin: process.env.CUTGRAPH_PUBLIC_ORIGIN || `http://localhost:${port}`,
     fixturesDir: fileURLToPath(new URL('../fixtures', import.meta.url)),

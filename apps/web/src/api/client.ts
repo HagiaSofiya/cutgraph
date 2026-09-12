@@ -65,3 +65,9 @@ export async function getHealth(): Promise<HealthResponse> {
   if (!res.ok) throw await readError(res);
   return HealthResponseSchema.parse(await res.json());
 }
+
+export async function cancelJob(jobId: string): Promise<{ canceled: boolean }> {
+  const res = await fetch(`${API_BASE}/api/jobs/${jobId}`, { method: 'DELETE' });
+  if (!res.ok) throw await readError(res);
+  return res.json();
+}

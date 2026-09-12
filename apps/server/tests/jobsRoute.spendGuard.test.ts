@@ -12,7 +12,7 @@ function buildApp(spendGuard: SpendGuard) {
   const store = new JobStore(60_000);
   const runner = new JobRunner(store, new FixtureGenerationAdapter(sim, 'http://localhost:8787/fixtures'));
   const app = new Hono();
-  app.route('/api/jobs', createJobsRoute(runner, store, spendGuard));
+  app.route('/api/jobs', createJobsRoute(runner, spendGuard));
   return { app, store };
 }
 
