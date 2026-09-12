@@ -51,7 +51,7 @@ describe('RunwayGenerationAdapter', () => {
     return {
       jobId: 'job-1',
       nodeType: 'textToImage',
-      params: { prompt: 'a cat', ratio: '16:9' },
+      params: { prompt: 'a cat', ratio: '16:9', model: 'gen4_image' },
       inputs: [],
       cacheKey: 'k1',
     };
@@ -98,7 +98,7 @@ describe('RunwayGenerationAdapter', () => {
     const request: GenerateRequest = {
       jobId: 'job-2',
       nodeType: 'imageToVideo',
-      params: { prompt: 'walk forward', duration: 6.4, ratio: '4:3' },
+      params: { prompt: 'walk forward', duration: 6.4, ratio: '4:3', model: 'gen4.5' },
       inputs: [{ url: 'https://elsewhere.example/source.jpg', kind: 'image', sha256: 'abc' }],
       cacheKey: 'k2',
     };
@@ -136,7 +136,7 @@ describe('RunwayGenerationAdapter', () => {
     const request: GenerateRequest = {
       jobId: 'job-3',
       nodeType: 'imageToVideo',
-      params: { prompt: 'walk forward', duration: 4, ratio: '16:9' },
+      params: { prompt: 'walk forward', duration: 4, ratio: '16:9', model: 'gen4.5' },
       inputs: [{ url: `${PUBLIC_ORIGIN}/uploads/${filename}`, kind: 'image', sha256: sha }],
       cacheKey: 'k3',
     };
@@ -154,7 +154,7 @@ describe('RunwayGenerationAdapter', () => {
     const request: GenerateRequest = {
       jobId: 'job-4',
       nodeType: 'imageToVideo',
-      params: { prompt: 'walk forward', duration: 4, ratio: '16:9' },
+      params: { prompt: 'walk forward', duration: 4, ratio: '16:9', model: 'gen4.5' },
       inputs: [{ url: `${PUBLIC_ORIGIN}/uploads/../../etc/passwd`, kind: 'image', sha256: 'x' }],
       cacheKey: 'k4',
     };
@@ -176,7 +176,7 @@ describe('RunwayGenerationAdapter', () => {
     const request: GenerateRequest = {
       jobId: 'job-5',
       nodeType: 'imageToVideo',
-      params: { prompt: 'walk forward', duration: 4, ratio: '16:9' },
+      params: { prompt: 'walk forward', duration: 4, ratio: '16:9', model: 'gen4.5' },
       inputs: [{ url: `${PUBLIC_ORIGIN}/uploads/${filename}`, kind: 'image', sha256: sha }],
       cacheKey: 'k5',
     };
@@ -201,5 +201,58 @@ describe('RunwayGenerationAdapter', () => {
     const result = await adapter.generate(textToImageRequest());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.message).toBe('boom');
+  });
+
+  it('sends the node\'s selected model, with that model\'s own ratio mapping', async () => {
+    const create = vi.fn().mockReturnValue(
+      fakeTask({ id: 'task_1', estimatedCost: { credits: 1 } }, async () => ({
+        id: 'task_1',
+        status: 'SUCCEEDED',
+        output: ['https://runway.example/out.png'],
+      })),
+    );
+    const client = { textToImage: { create }, imageToVideo: { create: vi.fn() } } as unknown as RunwayML;
+    const adapter = new RunwayGenerationAdapter(client, uploadStore, uploadsDir, PUBLIC_ORIGIN);
+
+    const result = await adapter.generate({
+      ...textToImageRequest(),
+      params: { prompt: 'a cat', ratio: '4:3', model: 'grok_imagine_image_2' },
+    });
+
+    // 4:3 resolves to a different pixel pair per model -- gen4_image would be 1440:1080.
+    expect(create).toHaveBeenCalledWith({
+      model: 'grok_imagine_image_2',
+      promptText: 'a cat',
+      ratio: '1152:864',
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.result.width).toBe(1152);
+      expect(result.result.height).toBe(864);
+    }
+  });
+
+  it('snaps duration when the selected image-to-video model only accepts certain lengths', async () => {
+    const create = vi.fn().mockReturnValue(
+      fakeTask({ id: 'task_2', estimatedCost: { credits: 5 } }, async () => ({
+        id: 'task_2',
+        status: 'SUCCEEDED',
+        output: ['https://runway.example/out.mp4'],
+      })),
+    );
+    const client = { textToImage: { create: vi.fn() }, imageToVideo: { create } } as unknown as RunwayML;
+    const adapter = new RunwayGenerationAdapter(client, uploadStore, uploadsDir, PUBLIC_ORIGIN);
+
+    await adapter.generate({
+      jobId: 'job-2',
+      nodeType: 'imageToVideo',
+      params: { prompt: 'walk forward', duration: 4, ratio: '16:9', model: 'gen4_turbo' },
+      inputs: [{ url: 'https://example.com/in.png', kind: 'image', sha256: 'abc' }],
+      cacheKey: 'k2',
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gen4_turbo', duration: 5, ratio: '1280:720' }),
+    );
   });
 });

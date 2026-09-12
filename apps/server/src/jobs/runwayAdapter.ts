@@ -12,12 +12,12 @@ import type RunwayML from '@runwayml/sdk';
 import type { StoredUpload, UploadStore } from '../media/uploadStore';
 import { mapRunwayError } from './runwayErrors';
 import {
-  IMAGE_TO_VIDEO_MODEL,
+  mapGen4ImageRatio,
+  mapGrokImageRatio,
   mapImageToVideoDuration,
   mapImageToVideoRatio,
   mapTextToImageRatio,
   pixelPairToDimensions,
-  TEXT_TO_IMAGE_MODEL,
 } from './runwayParams';
 
 // Data URIs are capped at 5MB *encoded*; base64 inflates raw bytes by ~4/3, so this is the
@@ -62,38 +62,37 @@ export class RunwayGenerationAdapter implements GenerationAdapter {
 
   private async generateImage(request: GenerateRequest, hooks?: GenerateHooks) {
     const params = request.params as TextToImageParams;
-    const ratio = mapTextToImageRatio(params.ratio);
+    const { model } = params;
 
-    const task = this.client.textToImage.create({
-      model: TEXT_TO_IMAGE_MODEL,
-      promptText: params.prompt,
-      ratio,
-    });
+    // Branched on the literal rather than passed a union: each model is its own overload in the
+    // SDK with its own ratio union, so this is what makes a mismatched pair a compile error.
+    const task =
+      model === 'gen4_image'
+        ? this.client.textToImage.create({ model, promptText: params.prompt, ratio: mapGen4ImageRatio(params.ratio) })
+        : this.client.textToImage.create({ model, promptText: params.prompt, ratio: mapGrokImageRatio(params.ratio) });
     await task; // task accepted server-side; distinct from waitForTaskOutput's polling below
     hooks?.onRunning?.();
     const output = await task.waitForTaskOutput();
 
     const stored = await this.storeOutput(output.output[0], 'image');
-    const { width, height } = pixelPairToDimensions(ratio);
+    const { width, height } = pixelPairToDimensions(mapTextToImageRatio(model, params.ratio));
     return { url: stored.publicUrl, kind: 'image' as const, width, height };
   }
 
   private async generateVideo(request: GenerateRequest, hooks?: GenerateHooks) {
     const params = request.params as ImageToVideoParams;
+    const { model } = params;
     const ratio = mapImageToVideoRatio(params.ratio);
-    const duration = mapImageToVideoDuration(params.duration);
+    const duration = mapImageToVideoDuration(model, params.duration);
 
     const inputUrl = request.inputs[0]?.url;
     if (!inputUrl) throw new Error('imageToVideo requires an input image');
     const promptImage = await this.resolvePromptImage(inputUrl);
 
-    const task = this.client.imageToVideo.create({
-      model: IMAGE_TO_VIDEO_MODEL,
-      promptImage,
-      promptText: params.prompt,
-      ratio,
-      duration,
-    });
+    const task =
+      model === 'gen4.5'
+        ? this.client.imageToVideo.create({ model, promptImage, promptText: params.prompt, ratio, duration })
+        : this.client.imageToVideo.create({ model, promptImage, promptText: params.prompt, ratio, duration });
     await task;
     hooks?.onRunning?.();
     const output = await task.waitForTaskOutput();

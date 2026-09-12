@@ -1,4 +1,4 @@
-import { actions, type ImageToVideoParams } from '@cutgraph/shared';
+import { actions, DEFAULT_IMAGE_TO_VIDEO_MODEL, ImageToVideoModelEnum, type ImageToVideoParams } from '@cutgraph/shared';
 import type { NodeProps } from '@xyflow/react';
 import { memo, useState } from 'react';
 import { useGraph } from '../state/graphContext';
@@ -7,6 +7,7 @@ import { NodeShell } from './NodeShell';
 import type { CutgraphNode } from '../canvas/types';
 
 const RATIOS = ['1:1', '16:9', '9:16', '4:3'] as const;
+const MODELS = ImageToVideoModelEnum.options;
 
 function ImageToVideoNodeImpl({ id, data, selected }: NodeProps<CutgraphNode>) {
   const { dispatch } = useGraph();
@@ -53,6 +54,17 @@ function ImageToVideoNodeImpl({ id, data, selected }: NodeProps<CutgraphNode>) {
           />
           <span>sec</span>
         </div>
+        <select
+          value={params.model ?? DEFAULT_IMAGE_TO_VIDEO_MODEL}
+          onChange={(e) => update({ model: e.target.value as ImageToVideoParams['model'] })}
+          style={{ width: '100%', marginTop: 6 }}
+        >
+          {MODELS.map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
         <div style={{ marginTop: 8 }}>
           <MediaPreview result={node.result} isActive={isHovered || selected} />
         </div>

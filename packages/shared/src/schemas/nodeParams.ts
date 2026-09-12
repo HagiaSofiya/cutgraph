@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { RatioEnum } from './common';
+import {
+  DEFAULT_IMAGE_TO_VIDEO_MODEL,
+  DEFAULT_TEXT_TO_IMAGE_MODEL,
+  ImageToVideoModelEnum,
+  RatioEnum,
+  TextToImageModelEnum,
+} from './common';
 
 export const ImageInputParamsSchema = z
   .object({
@@ -13,6 +19,7 @@ export const TextToImageParamsSchema = z
   .object({
     prompt: z.string().min(1).max(2000),
     ratio: RatioEnum,
+    model: TextToImageModelEnum.default(DEFAULT_TEXT_TO_IMAGE_MODEL),
   })
   .strict();
 
@@ -21,6 +28,7 @@ export const ImageToVideoParamsSchema = z
     prompt: z.string().min(1).max(2000),
     duration: z.number().min(2).max(10).default(4),
     ratio: RatioEnum,
+    model: ImageToVideoModelEnum.default(DEFAULT_IMAGE_TO_VIDEO_MODEL),
   })
   .strict();
 

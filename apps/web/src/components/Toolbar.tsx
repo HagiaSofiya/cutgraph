@@ -1,4 +1,4 @@
-import { actions } from '@cutgraph/shared';
+import { actions, DEFAULT_IMAGE_TO_VIDEO_MODEL, DEFAULT_TEXT_TO_IMAGE_MODEL } from '@cutgraph/shared';
 import type { NodeType } from '@cutgraph/shared';
 import { useGraph } from '../state/graphContext';
 import { RunButton } from './RunButton';
@@ -6,8 +6,8 @@ import { AdapterBadge } from './AdapterBadge';
 
 const DEFAULT_PARAMS: Record<NodeType, Record<string, unknown>> = {
   imageInput: { sourceName: '', sourceSize: 0, sourceLastModified: 0 },
-  textToImage: { prompt: '', ratio: '1:1' },
-  imageToVideo: { prompt: '', duration: 4, ratio: '16:9' },
+  textToImage: { prompt: '', ratio: '1:1', model: DEFAULT_TEXT_TO_IMAGE_MODEL },
+  imageToVideo: { prompt: '', duration: 4, ratio: '16:9', model: DEFAULT_IMAGE_TO_VIDEO_MODEL },
   trim: { start: 0, end: 1 },
   concat: {},
   export: { filename: 'cutgraph-export.mp4' },

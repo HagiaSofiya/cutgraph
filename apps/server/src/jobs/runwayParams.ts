@@ -1,4 +1,4 @@
-import type { RatioEnum } from '@cutgraph/shared';
+import type { ImageToVideoModel, RatioEnum, TextToImageModel } from '@cutgraph/shared';
 import { z } from 'zod';
 
 export type Ratio = z.infer<typeof RatioEnum>;
@@ -24,25 +24,65 @@ export type Gen4ImageRatio =
   | '720:960'
   | '1680:720';
 
+// gen4.5 and gen4_turbo accept the identical six pixel pairs (verified against both
+// ImageToVideoCreateParams.Gen4_5.ratio and .Gen4Turbo.ratio), so one map serves both models.
 export type Gen45Ratio = '1280:720' | '720:1280' | '1104:832' | '960:960' | '832:1104' | '1584:672';
 
-// The models this adapter targets. Fixed, not configurable -- narrowed down from the full
-// Runway catalog to the two that fit our schemas (prompt-only textToImage with no reference
-// images; single-image, prompt + duration + ratio imageToVideo).
-export const TEXT_TO_IMAGE_MODEL = 'gen4_image' as const;
-export const IMAGE_TO_VIDEO_MODEL = 'gen4.5' as const;
+// Copied from TextToImageCreateParams.GrokImagineImage2.ratio, same as the gen4_image union
+// above: a typo is then a compile error rather than a 400 from the API.
+export type GrokImageRatio =
+  | '1024:1024'
+  | '1280:720'
+  | '720:1280'
+  | '1152:864'
+  | '864:1152'
+  | '1248:832'
+  | '832:1248'
+  | '1248:576'
+  | '576:1248'
+  | '1280:576'
+  | '576:1280'
+  | '1408:704'
+  | '704:1408'
+  | '2048:2048'
+  | '2816:1584'
+  | '1584:2816'
+  | '2368:1776'
+  | '1776:2368'
+  | '2496:1664'
+  | '1664:2496'
+  | '2912:1344'
+  | '1344:2912'
+  | '3200:1440'
+  | '1440:3200'
+  | '2912:1456'
+  | '1456:2912'
+  | 'auto_1k'
+  | 'auto_2k';
 
-// What /api/health reports as runnable, per generation node type.
-export const TEXT_TO_IMAGE_MODELS = [TEXT_TO_IMAGE_MODEL] as const;
-export const IMAGE_TO_VIDEO_MODELS = [IMAGE_TO_VIDEO_MODEL] as const;
+// What /api/health reports as runnable, per generation node type. The authoritative list is the
+// Zod enum in shared -- these mirror it, and the Record types below make a model added there
+// without a ratio mapping here a compile error.
+export const TEXT_TO_IMAGE_MODELS = ['gen4_image', 'grok_imagine_image_2'] as const;
+export const IMAGE_TO_VIDEO_MODELS = ['gen4.5', 'gen4_turbo'] as const;
 
 // Verified against @runwayml/sdk 4.20.0's TextToImageCreateParams.Gen4Image.ratio. All four of
 // our ratios have an exact pixel-pair match.
-const TEXT_TO_IMAGE_RATIO_MAP: Record<Ratio, Gen4ImageRatio> = {
+const GEN4_IMAGE_RATIO_MAP: Record<Ratio, Gen4ImageRatio> = {
   '1:1': '1024:1024',
   '16:9': '1280:720',
   '9:16': '720:1280',
   '4:3': '1440:1080',
+};
+
+// Verified against TextToImageCreateParams.GrokImagineImage2.ratio. All four of our ratios have
+// an exact pixel-pair match here, including 4:3 (1152:864), which gen4_image also matches
+// exactly -- no approximation is needed on either text-to-image model.
+const GROK_IMAGE_RATIO_MAP: Record<Ratio, GrokImageRatio> = {
+  '1:1': '1024:1024',
+  '16:9': '1280:720',
+  '9:16': '720:1280',
+  '4:3': '1152:864',
 };
 
 // Verified against @runwayml/sdk 4.20.0's ImageToVideoCreateParams.Gen4_5.ratio:
@@ -67,8 +107,18 @@ function mapRatio<T extends string>(map: Record<Ratio, T>, ratio: Ratio, context
   return mapped;
 }
 
-export function mapTextToImageRatio(ratio: Ratio): Gen4ImageRatio {
-  return mapRatio(TEXT_TO_IMAGE_RATIO_MAP, ratio, 'textToImage');
+export function mapGen4ImageRatio(ratio: Ratio): Gen4ImageRatio {
+  return mapRatio(GEN4_IMAGE_RATIO_MAP, ratio, 'gen4_image');
+}
+
+export function mapGrokImageRatio(ratio: Ratio): GrokImageRatio {
+  return mapRatio(GROK_IMAGE_RATIO_MAP, ratio, 'grok_imagine_image_2');
+}
+
+// Only used to report dimensions; both text-to-image models map every ratio exactly, so the
+// pixel pair is always a faithful description of what was requested.
+export function mapTextToImageRatio(model: TextToImageModel, ratio: Ratio): string {
+  return model === 'gen4_image' ? mapGen4ImageRatio(ratio) : mapGrokImageRatio(ratio);
 }
 
 export function mapImageToVideoRatio(ratio: Ratio): Gen45Ratio {
@@ -88,7 +138,19 @@ export function pixelPairToDimensions(pixelPair: string): { width: number; heigh
 // gen4.5's duration is documented as "must be an integer from 2 to 10", which already matches
 // our schema's z.number().min(2).max(10) range -- the only real gap is fractional input, so this
 // rounds rather than truncates (e.g. a 6.4s request becomes 6s, not silently 6.999->6).
-export function mapImageToVideoDuration(duration: number): number {
+//
+// gen4_turbo is the awkward one: the SDK types its duration as a bare `number`, so nothing would
+// catch an out-of-range value at compile time, and a wrong one is a 400 at generation time. It is
+// therefore snapped to the two durations that model is documented to accept, the same way the
+// 4:3 ratio approximation above prefers a documented near-miss over a silent guess.
+const GEN4_TURBO_DURATIONS = [5, 10];
+
+export function mapImageToVideoDuration(model: ImageToVideoModel, duration: number): number {
+  if (model === 'gen4_turbo') {
+    return GEN4_TURBO_DURATIONS.reduce((best, d) =>
+      Math.abs(d - duration) < Math.abs(best - duration) ? d : best,
+    );
+  }
   const rounded = Math.round(duration);
   return Math.min(10, Math.max(2, rounded));
 }
