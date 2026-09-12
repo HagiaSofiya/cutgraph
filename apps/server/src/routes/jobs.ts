@@ -1,8 +1,10 @@
 import { CreateJobRequestSchema, NodeParamsSchemaByType } from '@cutgraph/shared';
 import { Hono } from 'hono';
 import type { JobRunner } from '../jobs/jobRunner';
+import type { JobStore } from '../jobs/jobStore';
+import type { SpendGuard } from '../jobs/spendGuard';
 
-export function createJobsRoute(runner: JobRunner): Hono {
+export function createJobsRoute(runner: JobRunner, jobStore: JobStore, spendGuard: SpendGuard): Hono {
   const app = new Hono();
 
   app.post('/', async (c) => {
@@ -18,7 +20,21 @@ export function createJobsRoute(runner: JobRunner): Hono {
       return c.json({ error: { message: 'invalid params', issues: parsedParams.error.issues } }, 400);
     }
 
+    // Checked here, before a job is ever queued, rather than inside JobRunner -- a rejection
+    // must never become a queued job that immediately fails.
+    const reservation = spendGuard.tryReserve();
+    if (!reservation.ok) {
+      return c.json({ error: { message: reservation.reason } }, 429);
+    }
+
     const { jobId, createdAt } = runner.create(nodeType, parsedParams.data, inputs, cacheKey);
+    const unsubscribe = jobStore.subscribe(jobId, (event) => {
+      if (event.event === 'job.succeeded' || event.event === 'job.failed') {
+        spendGuard.release();
+        unsubscribe();
+      }
+    });
+
     return c.json({ jobId, status: 'queued', cacheKey, createdAt }, 202);
   });
 
