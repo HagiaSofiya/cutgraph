@@ -2,8 +2,8 @@
 // codec, so Concat's own risk (sequential mediabunny concatenation) never has to also solve
 // re-encoding mismatched sources. Duration is the only thing that varies.
 //
-// Kept in sync by hand with scripts/generate-fixtures.mjs, which is what actually produces
-// these files via ffmpeg.
+// These definitions are duplicated in scripts/generate-fixtures.mjs, which is what actually
+// produces these files via ffmpeg. fixturePool.drift.test.ts fails if the two ever disagree.
 
 export interface ImageFixture {
   file: string;

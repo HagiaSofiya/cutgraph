@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Generates cutgraph's fixture-mode media pool entirely offline via ffmpeg. Kept in sync by
-// hand with apps/server/src/jobs/fixturePool.ts, which is the source of truth the server
-// actually reads at runtime -- this script only needs to produce files at those same paths.
+// Generates cutgraph's fixture-mode media pool entirely offline via ffmpeg. The definitions
+// below are duplicated in apps/server/src/jobs/fixturePool.ts, which is the source of truth the
+// server actually reads at runtime -- this script only needs to produce files at those same
+// paths. apps/server/tests/fixturePool.drift.test.ts fails if the two ever disagree.
 //
 // The video pool is deliberately uniform (one resolution, one framerate, one codec; only
 // duration varies) so Concat's own risk -- sequential mediabunny concatenation -- never also
@@ -10,12 +11,12 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturesRoot = path.join(__dirname, '..', 'apps', 'server', 'fixtures');
 
-const IMAGE_FIXTURES = [
+export const IMAGE_FIXTURES = [
   { file: 'img-0.png', width: 768, height: 768, color: '0xE63946' },
   { file: 'img-1.png', width: 768, height: 768, color: '0xF1A208' },
   { file: 'img-2.png', width: 768, height: 768, color: '0x2A9D8F' },
@@ -23,7 +24,7 @@ const IMAGE_FIXTURES = [
   { file: 'img-4.png', width: 768, height: 768, color: '0x8338EC' },
 ];
 
-const VIDEO_FIXTURES = [
+export const VIDEO_FIXTURES = [
   { file: 'clip-0.mp4', width: 1280, height: 720, durationSec: 2 },
   { file: 'clip-1.mp4', width: 1280, height: 720, durationSec: 3 },
   { file: 'clip-2.mp4', width: 1280, height: 720, durationSec: 4 },
@@ -63,15 +64,22 @@ function generateVideo({ file, width, height, durationSec }, index, dir) {
   ]);
 }
 
-const imageDir = path.join(fixturesRoot, 'text-to-image');
-const videoDir = path.join(fixturesRoot, 'image-to-video');
-ensureDir(imageDir);
-ensureDir(videoDir);
+// Guarded so the fixture definitions above can be imported (by
+// apps/server/tests/fixturePool.drift.test.ts) without shelling out to ffmpeg. Same isMain
+// check apps/server/src/index.ts uses.
+const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 
-console.log('Generating image fixtures...');
-IMAGE_FIXTURES.forEach((fixture, i) => generateImage(fixture, i, imageDir));
+if (isMain) {
+  const imageDir = path.join(fixturesRoot, 'text-to-image');
+  const videoDir = path.join(fixturesRoot, 'image-to-video');
+  ensureDir(imageDir);
+  ensureDir(videoDir);
 
-console.log('Generating video fixtures...');
-VIDEO_FIXTURES.forEach((fixture, i) => generateVideo(fixture, i, videoDir));
+  console.log('Generating image fixtures...');
+  IMAGE_FIXTURES.forEach((fixture, i) => generateImage(fixture, i, imageDir));
 
-console.log(`Done. Wrote ${IMAGE_FIXTURES.length} images and ${VIDEO_FIXTURES.length} clips to ${fixturesRoot}`);
+  console.log('Generating video fixtures...');
+  VIDEO_FIXTURES.forEach((fixture, i) => generateVideo(fixture, i, videoDir));
+
+  console.log(`Done. Wrote ${IMAGE_FIXTURES.length} images and ${VIDEO_FIXTURES.length} clips to ${fixturesRoot}`);
+}

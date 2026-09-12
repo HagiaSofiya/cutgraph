@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.22.2 is pinned deliberately: it is the exact floor the README documents (jsdom 30
+        # needs ^22.22.2 || ^24.15.0 || >=26.0.0), so this job proves that claim rather than
+        # whatever the latest 22.x happens to be. 24 brackets the top.
+        node-version: ["22.22.2", 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

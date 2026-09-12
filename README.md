@@ -1,5 +1,7 @@
 # Cutgraph
 
+[![CI](https://github.com/HagiaSofiya/cutgraph/actions/workflows/ci.yml/badge.svg)](https://github.com/HagiaSofiya/cutgraph/actions/workflows/ci.yml)
+
 A node-based editor for generative video workflows: a small DAG canvas, in the spirit of
 ComfyUI, but for generative clips. Build a graph of image/video generation and editing steps,
 run it and watch each node's status stream in live.
@@ -14,12 +16,19 @@ canvas performance) before a single credit gets spent on a real adapter. See
 [Architecture decisions](#architecture-decisions) for why that seam is designed the way it is.
 
 Phase 2 added a real adapter against the Runway Dev API (`CUTGRAPH_ADAPTER=runway`, see
-[Runway adapter](#runway-adapter) below). Fixture mode stays the default; the deployed demo runs
-fixture mode.
+[Runway adapter](#runway-adapter) below). Fixture mode stays the default.
+
+**The Runway adapter has not been run against the live API yet.** Its parameter mapping and error
+taxonomy are unit-tested against a mocked SDK client, which checks them against the SDK's *types*
+but never against the API's behavior -- a wrong mapping would surface as a 400 at generation time,
+which is exactly what a mock cannot catch. `scripts/verify-runway.ts` is the matrix that closes
+that gap; see [Testing](#testing).
 
 ## Quick start
 
-Requires Node 20+ and `ffmpeg` on your `PATH` (used once, offline, to generate fixture media).
+Requires Node 22.22.2+ (or 24.15+, or 26+) and `ffmpeg` on your `PATH` (used once, offline, to
+generate fixture media). That floor is jsdom 30's and only the test suite needs it -- running the
+app alone works on Node 20.19+, which is Vite 8's floor, but `npm test` does not.
 
 ```bash
 npm install
@@ -187,12 +196,32 @@ Env vars for `apps/server` (all optional):
 | `CUTGRAPH_MAX_GENERATIONS_TOTAL` | 50 | per-process cap on total generations (runway only) |
 | `CUTGRAPH_MAX_CONCURRENT_JOBS` | 3 | per-process cap on in-flight generations (runway only) |
 
+And one for `apps/web`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VITE_API_BASE_URL` | `http://localhost:8787` | where the canvas looks for the API |
+
+`VITE_API_BASE_URL` is read at *build* time (`apps/web/src/api/client.ts`), not at runtime, so it
+has to be set before `vite build` -- Vite bakes it into the bundle. A production build made
+without it silently ships pointing at localhost.
+
 ## Runway adapter
 
 `CUTGRAPH_ADAPTER=runway` swaps the fixture adapter for a real one against the Runway Dev API
 (`@runwayml/sdk`), implementing the same `GenerationAdapter` interface. A missing or empty
 `CUTGRAPH_RUNWAY_API_KEY` logs a loud warning and falls back to fixture mode rather than
 crashing the server.
+
+**Getting a key.** Keys come from [dev.runwayml.com](https://dev.runwayml.com/), a portal separate
+from the consumer Runway app with its own credit pool -- a Standard/Pro/Max subscription does not
+apply. Create an account, create an organization, generate a key under the API Keys tab (shown
+once), then fund the organization: there is a $10 minimum at $0.01/credit before the first call.
+
+Note that cutgraph reads `CUTGRAPH_RUNWAY_API_KEY`, not the `RUNWAYML_API_SECRET` that Runway's
+SDKs pick up on their own -- `apps/server/src/index.ts` passes the key explicitly. Setting only
+the SDK's variable leaves you in fixture mode; the toolbar's adapter chip is what tells you that
+happened.
 
 - **Models.** Selectable per node: Text to Image runs `gen4_image` or `grok_imagine_image_2`,
   Image to Video runs `gen4.5` or `gen4_turbo`. Two each rather than Runway's full catalog because
@@ -234,14 +263,30 @@ crashing the server.
 ## Testing
 
 ```bash
-npm test          # 192 tests across all three packages
+npm test          # 194 tests across all three packages
 npm run typecheck
 ```
 
+Every push and pull request runs `npm run typecheck` and `npm test` on Node 22.22.2 and 24
+(`.github/workflows/ci.yml`). The lower version is pinned to the exact floor documented above
+rather than to the latest 22.x, so CI proves that claim instead of assuming it. No ffmpeg step:
+nothing under test reads the generated fixture media.
+
 No test makes a real Runway API call or spends a credit: the param mapping tables, the error
 taxonomy and the spend guard are unit-tested directly, and the adapter itself is tested against
-a mocked SDK client. Verification against the live API (`CUTGRAPH_ADAPTER=runway` with a real
-`CUTGRAPH_RUNWAY_API_KEY`) is manual, a small number of runs, not part of the automated suite.
+a mocked SDK client. Live verification is therefore manual and deliberately out of the automated
+suite -- it costs money, so it cannot run on every push:
+
+```bash
+npx tsx scripts/verify-runway.ts                                        # dry run, no key needed
+CUTGRAPH_RUNWAY_API_KEY=... npx tsx scripts/verify-runway.ts --confirm
+```
+
+That drives the real adapter once per interesting parameter combination -- both text-to-image
+models, both image-to-video models, the `4:3` near-miss and `gen4_turbo`'s duration snapping,
+plus a free auth-failure probe -- and prints the mapped SDK params next to each outcome, so a 400
+can be read against the exact value that caused it. About 125 credits (~$1.25). The dry run needs
+no credits and still shows what every mapping resolves to.
 
 WebCodecs can't run in jsdom, so mediabunny itself is mocked in `apps/web` unit tests; the
 orchestration logic around it (executors, the run loop, persistence, reconciliation) is what's
@@ -252,3 +297,11 @@ manually in a real browser end to end.
 
 Auth, a database, multi-user, undo/redo, a settings page, any node type beyond the six above.
 Persistence is localStorage only.
+
+Deployment, too: there is no hosted demo and no deploy config. The server runs under `tsx`
+against raw TypeScript sources and consumes `@cutgraph/shared` as source rather than a build, so
+there is no production build path to deploy -- adding one is real work, not a checkbox.
+
+CORS is wide open by design at this scale: `apps/server/src/index.ts` calls `cors()` with no
+`origin`, which defaults to `Access-Control-Allow-Origin: *`. That is fine for two localhost
+ports and would need an allowlist before this was ever exposed.
