@@ -4,12 +4,18 @@ A node-based editor for generative video workflows: a small DAG canvas, in the s
 ComfyUI, but for generative clips. Build a graph of image/video generation and editing steps,
 run it and watch each node's status stream in live.
 
-Everything currently runs in *fixture mode*: no real generation API is called. Generation
-nodes resolve to local canned clips after a simulated delay, with a configurable failure rate,
-behind one swappable adapter interface. The point is to prove the orchestration layer correct
-(caching, staleness, partial failure, live status streaming, canvas performance) before a
-single credit gets spent on a real adapter. See [Architecture decisions](#architecture-decisions)
-for why that seam is designed the way it is.
+![A Cutgraph pipeline: Text to Image feeding two Image to Video nodes, concatenated and exported, all succeeded](docs/screenshot.png)
+
+Generation nodes run behind one swappable adapter interface. By default the server runs in
+*fixture mode*: no real generation API is called, nodes resolve to local canned clips after a
+simulated delay with a configurable failure rate. That's what the point of Phase 1 was: prove
+the orchestration layer correct (caching, staleness, partial failure, live status streaming,
+canvas performance) before a single credit gets spent on a real adapter. See
+[Architecture decisions](#architecture-decisions) for why that seam is designed the way it is.
+
+Phase 2 added a real adapter against the Runway Dev API (`CUTGRAPH_ADAPTER=runway`, see
+[Runway adapter](#runway-adapter) below). Fixture mode stays the default; the deployed demo runs
+fixture mode.
 
 ## Quick start
 
@@ -57,7 +63,8 @@ packages/shared/     framework-agnostic core: no React, no server deps
   src/cache/            stable hashing + cache-key derivation
 
 apps/server/          Hono backend, orchestrates generation jobs only
-  src/jobs/              fixtureAdapter (the swappable seam), jobRunner, jobStore
+  src/jobs/              fixtureAdapter + runwayAdapter (the swappable seam), jobRunner, jobStore,
+                         spendGuard
   src/sse/               sseHub, replay-buffered SSE streaming
   src/routes/            jobs, events (SSE), uploads, static fixture/upload serving
   fixtures/              generated media (gitignored; see `npm run generate-fixtures`)
@@ -75,67 +82,36 @@ scripts/generate-fixtures.mjs   offline ffmpeg script that seeds apps/server/fix
 React is a thin layer here on purpose: the reducer, cache-key derivation and run orchestrator
 are plain, framework-agnostic TypeScript, independently unit-tested without touching a DOM.
 
-## The four things this proves
-
-### 1. Per-node result caching
-
-`packages/shared/src/cache/cacheKey.ts` derives a node's cache key from its type, its own
-params and its *resolved* upstream output ids. It hashes with SHA-256 (truncated) rather than
-a weaker algorithm, because `MediaRef.id` *is* the cache key: a collision would serve the wrong
-media, not just waste a demo run. Upstream ordering is canonicalized inside the function itself
-(sorted by handle, not by call-site array order), so a graph rebuilt from localStorage in a
-different insertion order still derives byte-identical keys.
-
-The result cache (`Graph.resultCache`, keyed by cache key rather than by node) means:
-- Editing shot 3's prompt recomputes shot 3 and everything downstream of it; shots 1 and 2
-  keep byte-identical keys and are never re-run.
-- **Edit-and-revert is an instant cache hit.** Change a prompt, change it back: the old key is
-  still in the cache, so the node resolves immediately with no re-generation.
-- A generation that completes *after* the user has already edited that node's params still
-  lands in the result cache (in case they revert), even though the node itself stays stale.
-
-### 2. Partial failure and staleness
-
-`packages/shared/src/reducer/graphReducer.ts` is a pure reducer over an explicit six-state
-machine (`idle | queued | running | succeeded | failed | stale`). Two invariants do most of the
-work:
-
-- **`markStaleIfMeaningful`**: a node only becomes stale if it has something to invalidate (a
-  retained result, or an in-flight run). A never-run node stays idle.
-- **cacheKey-echo guard**: every lifecycle action carries the cache key its run was launched
-  with, and a terminal transition is only applied if that key still matches. This one
-  precondition makes three different races safe for free: an edit landing mid-run, a duplicate
-  SSE delivery and replay during refresh reconciliation.
-
-A failed node retains its last-succeeded result (visible, not discarded) and is retried
-independently via `orchestrator/runGraph.ts`'s `retryNode`, which does **not** cascade forward
-into that node's stale descendants, so a retry can't silently trigger several downstream paid
-generations once a real adapter is in place.
-
-### 3. Streaming status
-
-The backend only orchestrates the two generation node types (`TextToImage`, `ImageToVideo`) as
-jobs; everything else executes client-side. `apps/server/src/sse/sseHub.ts` buffers each job's
-last 3 events (queued/running/terminal) and replays them on (re)connect: via the
-`Last-Event-ID` header on the browser's own automatic reconnect, or a `?lastEventId=` query
-param for a fresh page load, which can't set that header itself.
-
-On boot, `apps/web/src/state/reconciliation.ts` finds every node still queued/running with a
-live job id, fetches its current status and either applies an already-terminal result directly
-or resumes the SSE subscription. This was verified against a real ~25-second job that survived
-a full page reload.
-
-### 4. Canvas performance
-
-A twelve-node graph never holds twelve decoded `<video>` elements. `MediaPreview.tsx` renders a
-poster `<img>` by default (extracted via mediabunny's `CanvasSink`) and mounts a real `<video>`
-only while that node is hovered or selected. `canvas/reconcileFlowNodes.ts` is a pure function
-that diffs the logical graph against xyflow's node array and only replaces the `data` reference
-for nodes that actually changed; every custom node component is wrapped in `React.memo`, so an
-unrelated node's status change doesn't re-render the other eleven.
-
 ## Architecture decisions
 
+- **Per-node result caching.** `packages/shared/src/cache/cacheKey.ts` derives a node's cache
+  key from its type, its own params and its *resolved* upstream output ids, hashed with SHA-256
+  (truncated) since `MediaRef.id` *is* the cache key and a collision would serve the wrong
+  media. Upstream ordering is canonicalized inside the function itself (sorted by handle, not
+  call-site array order), so a graph rebuilt from localStorage in a different insertion order
+  still derives byte-identical keys. Editing one node recomputes it and everything downstream;
+  unrelated nodes keep their keys and never re-run, and edit-and-revert is an instant cache hit
+  since the old key is still in `Graph.resultCache`.
+- **Partial failure and staleness.** `packages/shared/src/reducer/graphReducer.ts` is a pure
+  reducer over an explicit six-state machine (`idle | queued | running | succeeded | failed |
+  stale`). `markStaleIfMeaningful` only invalidates a node that has something to invalidate (a
+  retained result or an in-flight run), and a cacheKey-echo guard on every lifecycle action
+  makes an edit landing mid-run, a duplicate SSE delivery and reconciliation replay all safe for
+  free. A failed node keeps its last-succeeded result and retries independently via
+  `retryNode`, which does **not** cascade into that node's stale descendants, so a retry can't
+  silently trigger several downstream paid generations.
+- **Streaming status.** The backend only orchestrates the two generation node types as jobs;
+  `apps/server/src/sse/sseHub.ts` buffers each job's last 3 events and replays them on
+  (re)connect, via the `Last-Event-ID` header on the browser's own automatic reconnect or a
+  `?lastEventId=` query param for a fresh page load. On boot, `apps/web/src/state/reconciliation.ts`
+  finds every node still queued/running, fetches its current status and either applies an
+  already-terminal result or resumes the SSE subscription; verified against a real ~25-second
+  job that survived a full page reload.
+- **Canvas performance.** `MediaPreview.tsx` renders a poster `<img>` by default and mounts a
+  real `<video>` only while that node is hovered or selected, so a twelve-node graph never holds
+  twelve decoded video elements. `canvas/reconcileFlowNodes.ts` only replaces the `data`
+  reference for nodes that actually changed, and every node component is wrapped in
+  `React.memo`, so one node's status change doesn't re-render the others.
 - **Execution split.** The backend only ever sees the two node types that would eventually call
   a paid API. `ImageInput`, `Trim`, `Concat` and `Export` run entirely in the browser via
   mediabunny, moving through the same reducer with no network round-trip.
@@ -156,25 +132,66 @@ unrelated node's status change doesn't re-render the other eleven.
   track by hand and manually pumps decoded samples from each input in order, rewriting each
   sample's timestamp by a running cumulative offset.
 
-## Fixture mode configuration
+## Configuration
 
 Env vars for `apps/server` (all optional):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CUTGRAPH_SIM_MIN_LATENCY_MS` / `_MAX_LATENCY_MS` | 400 / 1200 | simulated queue latency before a job starts running |
-| `CUTGRAPH_SIM_MIN_PROCESSING_MS` / `_MAX_PROCESSING_MS` | 1500 / 4000 | simulated generation time |
-| `CUTGRAPH_SIM_FAILURE_RATE` | 0.15 | probability a job fails |
+| `CUTGRAPH_ADAPTER` | `fixture` | `fixture` or `runway` |
+| `CUTGRAPH_SIM_MIN_LATENCY_MS` / `_MAX_LATENCY_MS` | 400 / 1200 | simulated queue latency before a job starts running (fixture only) |
+| `CUTGRAPH_SIM_MIN_PROCESSING_MS` / `_MAX_PROCESSING_MS` | 1500 / 4000 | simulated generation time (fixture only) |
+| `CUTGRAPH_SIM_FAILURE_RATE` | 0.15 | probability a job fails (fixture only) |
 | `CUTGRAPH_JOB_RETENTION_MS` | 600000 | how long a finished job stays queryable |
 | `PORT` | 8787 | server port |
-| `CUTGRAPH_PUBLIC_ORIGIN` | `http://localhost:<PORT>` | base URL used to build fixture/upload links |
+| `CUTGRAPH_PUBLIC_ORIGIN` | `http://localhost:<PORT>` | base URL used to build fixture/upload/output links |
+| `CUTGRAPH_RUNWAY_API_KEY` | none | Runway Dev API key, server-side only, never sent to the browser |
+| `CUTGRAPH_MAX_GENERATIONS_TOTAL` | 50 | per-process cap on total generations (runway only) |
+| `CUTGRAPH_MAX_CONCURRENT_JOBS` | 3 | per-process cap on in-flight generations (runway only) |
+
+## Runway adapter
+
+`CUTGRAPH_ADAPTER=runway` swaps the fixture adapter for a real one against the Runway Dev API
+(`@runwayml/sdk`), implementing the same `GenerationAdapter` interface. A missing or empty
+`CUTGRAPH_RUNWAY_API_KEY` logs a loud warning and falls back to fixture mode rather than
+crashing the server.
+
+- **Models.** Text to Image uses `gen4_image`; Image to Video uses `gen4.5`. Both were chosen to
+  fit our schemas as-is (prompt-only text-to-image with no reference images; single-image,
+  prompt + duration + ratio image-to-video) rather than for being the newest or cheapest option.
+- **Ratio mapping.** Our four ratios (`1:1`, `16:9`, `9:16`, `4:3`) map to explicit pixel-pair
+  strings, verified against the SDK's own literal types rather than assumed
+  (`apps/server/src/jobs/runwayParams.ts`). Three of four are exact matches for both models;
+  `4:3` on Image to Video has no exact pixel pair in gen4.5's ratio set and uses the nearest
+  available (`1104:832`, ~0.5% off true 4:3) as a documented approximation.
+- **Duration.** gen4.5 accepts an integer from 2 to 10, matching our schema's existing range;
+  fractional input is rounded to the nearest integer, not truncated.
+- **Input reachability.** Runway fetches input images server-side, so a `http://localhost/...`
+  upload URL is unreachable to it. A URL under our own uploads is read straight off disk and
+  sent as a base64 data URI instead (capped at Runway's ~3.5MB raw limit, refused with a clear
+  error above that rather than silently truncated); any other URL passes through unchanged.
+- **Output persistence.** Runway's own output URLs expire in 24-48h. The adapter downloads and
+  stores the bytes through the same content-addressed upload store uploads already use, so
+  `JobResult.url` stays a stable, persistent URL rather than a link that rots after a couple of
+  days.
+- **Failure taxonomy.** Content moderation rejections, task failures, rate limits, timeouts and
+  auth/billing errors are mapped to distinct, actionable messages
+  (`apps/server/src/jobs/runwayErrors.ts`).
+- **Spend guard.** `POST /api/jobs` rejects with 429 once either per-process limit is hit,
+  before a job is ever queued. Only active when the runway adapter is actually selected; fixture
+  mode (and every existing test) is unaffected.
 
 ## Testing
 
 ```bash
-npm test          # 125 tests across all three packages
+npm test          # 154 tests across all three packages
 npm run typecheck
 ```
+
+No test makes a real Runway API call or spends a credit: the param mapping tables, the error
+taxonomy and the spend guard are unit-tested directly, and the adapter itself is tested against
+a mocked SDK client. Verification against the live API (`CUTGRAPH_ADAPTER=runway` with a real
+`CUTGRAPH_RUNWAY_API_KEY`) is manual, a small number of runs, not part of the automated suite.
 
 WebCodecs can't run in jsdom, so mediabunny itself is mocked in `apps/web` unit tests; the
 orchestration logic around it (executors, the run loop, persistence, reconciliation) is what's

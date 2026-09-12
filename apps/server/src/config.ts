@@ -8,6 +8,13 @@ export interface SimConfig {
   failureRate: number;
 }
 
+export type AdapterKind = 'fixture' | 'runway';
+
+export interface SpendGuardConfig {
+  maxGenerationsTotal: number;
+  maxConcurrentJobs: number;
+}
+
 export interface AppConfig {
   sim: SimConfig;
   jobRetentionMs: number;
@@ -15,6 +22,12 @@ export interface AppConfig {
   publicOrigin: string;
   fixturesDir: string;
   uploadsDir: string;
+  // Optional so existing test configs that construct AppConfig directly (predating the Runway
+  // adapter) keep compiling unchanged. Absent means "fixture adapter, no spend limits" -- see
+  // the fallbacks in index.ts.
+  adapter?: AdapterKind;
+  runwayApiKey?: string;
+  spendGuard?: SpendGuardConfig;
 }
 
 function envNumber(name: string, fallback: number): number {
@@ -22,6 +35,11 @@ function envNumber(name: string, fallback: number): number {
   if (raw === undefined || raw === '') return fallback;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function envAdapterKind(name: string, fallback: AdapterKind): AdapterKind {
+  const raw = process.env[name];
+  return raw === 'runway' || raw === 'fixture' ? raw : fallback;
 }
 
 // Re-reads env each call rather than caching a module-level singleton, so tests can construct
@@ -41,5 +59,11 @@ export function loadConfig(): AppConfig {
     publicOrigin: process.env.CUTGRAPH_PUBLIC_ORIGIN || `http://localhost:${port}`,
     fixturesDir: fileURLToPath(new URL('../fixtures', import.meta.url)),
     uploadsDir: fileURLToPath(new URL('../uploads', import.meta.url)),
+    adapter: envAdapterKind('CUTGRAPH_ADAPTER', 'fixture'),
+    runwayApiKey: process.env.CUTGRAPH_RUNWAY_API_KEY || undefined,
+    spendGuard: {
+      maxGenerationsTotal: envNumber('CUTGRAPH_MAX_GENERATIONS_TOTAL', 50),
+      maxConcurrentJobs: envNumber('CUTGRAPH_MAX_CONCURRENT_JOBS', 3),
+    },
   };
 }
