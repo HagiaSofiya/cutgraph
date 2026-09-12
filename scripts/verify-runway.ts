@@ -9,7 +9,7 @@
 // combination.
 //
 // Usage:
-//   CUTGRAPH_RUNWAY_API_KEY=... npx tsx scripts/verify-runway.ts          # dry run, spends nothing
+//   npx tsx scripts/verify-runway.ts                                      # dry run, no key needed
 //   CUTGRAPH_RUNWAY_API_KEY=... npx tsx scripts/verify-runway.ts --confirm
 //
 // Costs roughly 125 credits (~$1.25) against the $10 minimum top-up at dev.runwayml.com.
@@ -131,18 +131,6 @@ async function verifyAuthFailure(): Promise<void> {
 
 async function main(): Promise<void> {
   const apiKey = process.env.CUTGRAPH_RUNWAY_API_KEY;
-  if (!apiKey) {
-    console.error(
-      'CUTGRAPH_RUNWAY_API_KEY is not set.\n\n' +
-        "Note this is cutgraph's own variable, not the SDK's default RUNWAYML_API_SECRET -- the\n" +
-        'server passes the key explicitly (apps/server/src/index.ts), so setting only the SDK\n' +
-        'variable silently leaves you in fixture mode.\n\n' +
-        'Get a key at https://dev.runwayml.com/ (a separate portal from the consumer Runway app,\n' +
-        'with its own credit pool; $10 minimum top-up before the first call).',
-    );
-    process.exit(1);
-  }
-
   const confirmed = process.argv.includes('--confirm');
 
   console.log('Runway live verification matrix\n');
@@ -156,7 +144,20 @@ async function main(): Promise<void> {
 
   if (!confirmed) {
     console.log('\nDry run -- nothing was sent. Re-run with --confirm to spend credits.');
+    if (!apiKey) console.log('(No CUTGRAPH_RUNWAY_API_KEY set. Not needed for a dry run.)');
     return;
+  }
+
+  if (!apiKey) {
+    console.error(
+      '\n--confirm needs CUTGRAPH_RUNWAY_API_KEY, which is not set.\n\n' +
+        "Note this is cutgraph's own variable, not the SDK's default RUNWAYML_API_SECRET -- the\n" +
+        'server passes the key explicitly (apps/server/src/index.ts), so setting only the SDK\n' +
+        'variable silently leaves you in fixture mode.\n\n' +
+        'Get a key at https://dev.runwayml.com/ (a separate portal from the consumer Runway app,\n' +
+        'with its own credit pool; $10 minimum top-up before the first call).',
+    );
+    process.exit(1);
   }
 
   const adapter = buildAdapter(apiKey);

@@ -278,7 +278,7 @@ a mocked SDK client. Live verification is therefore manual and deliberately out 
 suite -- it costs money, so it cannot run on every push:
 
 ```bash
-CUTGRAPH_RUNWAY_API_KEY=... npx tsx scripts/verify-runway.ts            # dry run, spends nothing
+npx tsx scripts/verify-runway.ts                                        # dry run, no key needed
 CUTGRAPH_RUNWAY_API_KEY=... npx tsx scripts/verify-runway.ts --confirm
 ```
 
