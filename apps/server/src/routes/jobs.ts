@@ -24,7 +24,7 @@ export function createJobsRoute(runner: JobRunner, jobStore: JobStore, spendGuar
     // must never become a queued job that immediately fails.
     const reservation = spendGuard.tryReserve();
     if (!reservation.ok) {
-      return c.json({ error: { message: reservation.reason } }, 429);
+      return c.json({ error: { message: reservation.reason, code: 'SPEND_LIMIT' } }, 429);
     }
 
     const { jobId, createdAt } = runner.create(nodeType, parsedParams.data, inputs, cacheKey);

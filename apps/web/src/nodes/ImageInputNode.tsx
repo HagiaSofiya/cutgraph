@@ -28,7 +28,7 @@ function ImageInputNodeImpl({ id, data, selected }: NodeProps<CutgraphNode>) {
 
   return (
     <div onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}>
-      <NodeShell id={id} title="Image Input" status={node.status} errorMessage={node.error?.message} hasSourceHandle>
+      <NodeShell id={id} title="Image Input" status={node.status} error={node.error} hasSourceHandle>
         <input type="file" accept="image/*" onChange={handleFileChange} />
         {params.sourceName && <div style={{ marginTop: 6, color: '#aaa' }}>{params.sourceName}</div>}
         <div style={{ marginTop: 8 }}>

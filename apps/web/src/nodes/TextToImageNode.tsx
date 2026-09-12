@@ -20,7 +20,7 @@ function TextToImageNodeImpl({ id, data, selected }: NodeProps<CutgraphNode>) {
 
   return (
     <div onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}>
-      <NodeShell id={id} title="Text to Image" status={node.status} errorMessage={node.error?.message} hasSourceHandle>
+      <NodeShell id={id} title="Text to Image" status={node.status} error={node.error} hasSourceHandle>
         <textarea
           value={params.prompt ?? ''}
           onChange={(e) => update({ prompt: e.target.value })}

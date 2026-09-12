@@ -15,7 +15,7 @@ function ExportNodeImpl({ id, data }: NodeProps<CutgraphNode>) {
       id={id}
       title="Export"
       status={node.status}
-      errorMessage={node.error?.message}
+      error={node.error}
       targetHandles={[{ id: null }]}
       hasSourceHandle={false}
     >

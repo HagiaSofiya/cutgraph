@@ -141,7 +141,7 @@ export function graphReducer(graph: Graph, action: GraphAction): Graph {
       if (node.cacheKey !== action.cacheKey) return graph;
       return updateNode(graph, action.nodeId, {
         status: 'failed',
-        error: { message: action.error.message, at: Date.now() },
+        error: { message: action.error.message, code: action.error.code, at: Date.now() },
         jobId: undefined,
       });
     }

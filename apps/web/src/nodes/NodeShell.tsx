@@ -1,8 +1,9 @@
-import type { NodeStatus } from '@cutgraph/shared';
+import type { NodeFailure, NodeStatus } from '@cutgraph/shared';
 import { Handle, Position } from '@xyflow/react';
 import type { ReactNode } from 'react';
 import { executorsByNodeType } from '../orchestrator/executors';
 import { retryNode } from '../orchestrator/runGraph';
+import { FAILURE_GUIDANCE } from './failureGuidance';
 import { useGraph } from '../state/graphContext';
 
 const STATUS_COLORS: Record<NodeStatus, string> = {
@@ -23,7 +24,7 @@ interface NodeShellProps {
   id: string;
   title: string;
   status: NodeStatus;
-  errorMessage?: string;
+  error?: NodeFailure;
   targetHandles?: TargetHandleSpec[];
   hasSourceHandle?: boolean;
   children?: ReactNode;
@@ -33,12 +34,13 @@ export function NodeShell({
   id,
   title,
   status,
-  errorMessage,
+  error,
   targetHandles = [],
   hasSourceHandle = true,
   children,
 }: NodeShellProps) {
   const { dispatch, getGraph } = useGraph();
+  const guidance = error?.code ? FAILURE_GUIDANCE[error.code] : undefined;
 
   const handleRetry = () => {
     void retryNode(id, { getGraph, dispatch, executors: executorsByNodeType });
@@ -93,9 +95,14 @@ export function NodeShell({
 
       {status === 'failed' && (
         <div style={{ padding: '0 10px 10px' }}>
-          {errorMessage && <div style={{ color: '#ef4444', marginBottom: 6 }}>{errorMessage}</div>}
+          {error?.message && <div style={{ color: '#ef4444', marginBottom: 6 }}>{error.message}</div>}
+          {guidance && (
+            <div style={{ color: '#aaa', marginBottom: 6, fontSize: 11 }}>{guidance.hint}</div>
+          )}
+          {/* Still offered when the failure isn't retryable -- the user may know something we
+              don't -- but named so it doesn't read as the recommended next step. */}
           <button onClick={handleRetry} type="button">
-            Retry
+            {guidance && !guidance.retryable ? 'Retry anyway' : 'Retry'}
           </button>
         </div>
       )}

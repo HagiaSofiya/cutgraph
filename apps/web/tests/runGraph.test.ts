@@ -367,4 +367,31 @@ describe('runGraph', () => {
     expect(finalGraph.nodes.y.status).toBe('succeeded');
     expect(finalGraph.nodes.y.result?.id).toBe(finalGraph.nodes.x.result?.id);
   });
+
+  it('preserves a failure code carried on the rejection, and omits one when absent', async () => {
+    const graph = makeGraph([makeNode({ id: 'coded', type: 'trim', params: { start: 0, end: 1 } }), makeNode({ id: 'plain', type: 'trim', params: { start: 1, end: 2 } })]);
+    const executor: Executor = {
+      async run(ctx) {
+        ctx.dispatch(actions.nodeRunning(ctx.node.id, ctx.cacheKey));
+        if (ctx.node.id === 'coded') {
+          // Shape an ApiError carries: a message plus a recognized code.
+          throw Object.assign(new Error('generation limit reached'), { code: 'SPEND_LIMIT' });
+        }
+        throw new Error('a plain local failure');
+      },
+    };
+
+    const harness = createHarness(graph);
+    const run = createRunGraph();
+    await run(['coded', 'plain'], {
+      getGraph: harness.getGraph,
+      dispatch: harness.dispatch,
+      executors: everyNodeType(executor),
+    });
+
+    const finalGraph = harness.getGraph();
+    expect(finalGraph.nodes.coded.error?.code).toBe('SPEND_LIMIT');
+    expect(finalGraph.nodes.plain.error?.code).toBeUndefined();
+    expect(finalGraph.nodes.plain.error?.message).toBe('a plain local failure');
+  });
 });

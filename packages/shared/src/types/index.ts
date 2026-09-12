@@ -8,6 +8,30 @@ export type NodeType =
 
 export type NodeStatus = 'idle' | 'queued' | 'running' | 'succeeded' | 'failed' | 'stale';
 
+// Why a generation failed, in the only vocabulary that crosses the wire. The point is not to
+// enumerate every error -- it's that "retrying this unchanged might work" (RATE_LIMIT, TIMEOUT)
+// and "it never will until you change something" (MODERATION, AUTH, SPEND_LIMIT) are different
+// situations that used to reach the UI as identical red text with an identical Retry button.
+// An absent code means "unknown failure", which every client already had to handle.
+export const FAILURE_CODES = [
+  'MODERATION',
+  'RATE_LIMIT',
+  'TIMEOUT',
+  'AUTH',
+  'TASK_FAILED',
+  'INPUT_TOO_LARGE',
+  'SPEND_LIMIT',
+  'CANCELED',
+  'SIMULATED_FAILURE',
+] as const;
+
+export type FailureCode = (typeof FAILURE_CODES)[number];
+
+export interface NodeFailure {
+  message: string;
+  code?: FailureCode;
+}
+
 export interface MediaRef {
   id: string; // == the cacheKey that produced it
   kind: 'image' | 'video';
@@ -32,7 +56,7 @@ export interface GraphNode<P = unknown> {
   status: NodeStatus;
   result?: MediaRef; // last succeeded output, retained through 'stale' and 'failed'
   cacheKey?: string; // key of the run that produced `result`, or of the in-flight run
-  error?: { message: string; at: number };
+  error?: NodeFailure & { at: number };
   jobId?: string; // generation nodes only, while queued or running
   updatedAt: number;
 }

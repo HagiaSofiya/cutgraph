@@ -24,7 +24,7 @@ function ImageToVideoNodeImpl({ id, data, selected }: NodeProps<CutgraphNode>) {
         id={id}
         title="Image to Video"
         status={node.status}
-        errorMessage={node.error?.message}
+        error={node.error}
         targetHandles={[{ id: null }]}
         hasSourceHandle
       >

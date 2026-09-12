@@ -1,4 +1,4 @@
-import type { JobResult, SseEvent } from '@cutgraph/shared';
+import type { JobResult, NodeFailure, SseEvent } from '@cutgraph/shared';
 
 export type GenerationNodeType = 'textToImage' | 'imageToVideo';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
@@ -9,7 +9,7 @@ export interface JobRecord {
   cacheKey: string;
   status: JobStatus;
   result?: JobResult;
-  error?: { message: string };
+  error?: NodeFailure;
   createdAt: number;
   updatedAt: number;
   terminalAt?: number;
@@ -78,7 +78,7 @@ export class JobStore {
     });
   }
 
-  markFailed(jobId: string, error: { message: string }): void {
+  markFailed(jobId: string, error: NodeFailure): void {
     const record = this.jobs.get(jobId);
     if (!record || this.isTerminal(record)) return;
     record.status = 'failed';

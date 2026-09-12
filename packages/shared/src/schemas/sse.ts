@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { JobResultSchema } from './job';
+import { JobErrorSchema, JobResultSchema } from './job';
 
 const SseJobQueuedEventSchema = z.object({
   id: z.number(),
@@ -31,7 +31,7 @@ const SseJobFailedEventSchema = z.object({
     jobId: z.string(),
     cacheKey: z.string(),
     at: z.number(),
-    error: z.object({ message: z.string() }),
+    error: JobErrorSchema,
   }),
 });
 

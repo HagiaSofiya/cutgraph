@@ -83,4 +83,40 @@ describe('mapRunwayError', () => {
     expect(mapRunwayError(new Error('something else broke')).message).toBe('something else broke');
     expect(mapRunwayError('a plain string').message).toBe('a plain string');
   });
+
+  it('tags each failure kind with the code the canvas uses to decide whether Retry can help', () => {
+    const moderation = new TaskFailedError({
+      id: 'task_1',
+      cost: { credits: 0 },
+      createdAt: '2026-01-01T00:00:00Z',
+      status: 'FAILED',
+      failure: 'nope',
+      failureCode: 'SAFETY.INPUT.TEXT',
+    });
+    const taskFailed = new TaskFailedError({
+      id: 'task_2',
+      cost: { credits: 0 },
+      createdAt: '2026-01-01T00:00:00Z',
+      status: 'FAILED',
+      failure: 'internal error',
+      failureCode: 'INTERNAL.BAD_OUTPUT',
+    });
+
+    expect(mapRunwayError(moderation).code).toBe('MODERATION');
+    expect(mapRunwayError(taskFailed).code).toBe('TASK_FAILED');
+    expect(mapRunwayError(new TaskTimedOutError()).code).toBe('TIMEOUT');
+    expect(mapRunwayError(new APIConnectionTimeoutError()).code).toBe('TIMEOUT');
+    expect(mapRunwayError(new RateLimitError(429, undefined, 'rate limited', undefined)).code).toBe('RATE_LIMIT');
+    expect(mapRunwayError(new AuthenticationError(401, undefined, 'bad key', undefined)).code).toBe('AUTH');
+    expect(mapRunwayError(new PermissionDeniedError(403, undefined, 'no billing', undefined)).code).toBe('AUTH');
+  });
+
+  it("codes the adapter's own oversized-input refusal, which never reaches the SDK", () => {
+    const err = new Error('input image (4.2MB) exceeds the 3.5MB data-URI limit for this adapter');
+    expect(mapRunwayError(err).code).toBe('INPUT_TOO_LARGE');
+  });
+
+  it('leaves an unrecognized error uncoded rather than guessing', () => {
+    expect(mapRunwayError(new Error('something else entirely')).code).toBeUndefined();
+  });
 });

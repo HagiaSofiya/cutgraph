@@ -253,4 +253,23 @@ describe('graphReducer: HYDRATE_FROM_STORAGE', () => {
     expect(next.nodes.a).toBeUndefined();
     expect(next.nodes.z).toBeDefined();
   });
+
+  it('retains the failure code on the node, not just the message', () => {
+    let graph = makeGraph([makeNode({ id: 'a', type: 'textToImage' })]);
+    graph = graphReducer(graph, actions.nodeQueued('a', 'k1'));
+    graph = graphReducer(graph, actions.nodeRunning('a', 'k1'));
+    graph = graphReducer(graph, actions.nodeFailed('a', 'k1', { message: 'nope', code: 'MODERATION' }));
+
+    expect(graph.nodes.a.status).toBe('failed');
+    expect(graph.nodes.a.error?.code).toBe('MODERATION');
+  });
+
+  it('leaves the code undefined for a failure that carries none', () => {
+    let graph = makeGraph([makeNode({ id: 'a', type: 'trim' })]);
+    graph = graphReducer(graph, actions.nodeQueued('a', 'k1'));
+    graph = graphReducer(graph, actions.nodeRunning('a', 'k1'));
+    graph = graphReducer(graph, actions.nodeFailed('a', 'k1', { message: 'local failure' }));
+
+    expect(graph.nodes.a.error?.code).toBeUndefined();
+  });
 });

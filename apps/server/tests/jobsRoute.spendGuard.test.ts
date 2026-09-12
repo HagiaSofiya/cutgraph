@@ -62,4 +62,14 @@ describe('POST /api/jobs spend guard', () => {
     const second = await app.request('/api/jobs', { method: 'POST', body, headers: { 'Content-Type': 'application/json' } });
     expect(second.status).toBe(202);
   });
+
+  it('codes the 429 as SPEND_LIMIT so the canvas can say retrying will not help', async () => {
+    const { app } = buildApp(new SpendGuard(1, 10));
+
+    await app.request('/api/jobs', { method: 'POST', body, headers: { 'Content-Type': 'application/json' } });
+    const rejected = await app.request('/api/jobs', { method: 'POST', body, headers: { 'Content-Type': 'application/json' } });
+
+    expect(rejected.status).toBe(429);
+    expect((await rejected.json()).error.code).toBe('SPEND_LIMIT');
+  });
 });

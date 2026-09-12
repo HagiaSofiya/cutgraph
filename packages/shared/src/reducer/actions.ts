@@ -1,4 +1,4 @@
-import type { Graph, GraphEdge, MediaRef, NodeType } from '../types';
+import type { Graph, GraphEdge, MediaRef, NodeFailure, NodeType } from '../types';
 
 export type GraphAction =
   | { type: 'NODE_ADDED'; nodeId: string; nodeType: NodeType; position: { x: number; y: number }; params: unknown }
@@ -10,7 +10,7 @@ export type GraphAction =
   | { type: 'NODE_QUEUED'; nodeId: string; cacheKey: string }
   | { type: 'NODE_RUNNING'; nodeId: string; cacheKey: string; jobId?: string }
   | { type: 'NODE_SUCCEEDED'; nodeId: string; cacheKey: string; result: MediaRef }
-  | { type: 'NODE_FAILED'; nodeId: string; cacheKey: string; error: { message: string } }
+  | { type: 'NODE_FAILED'; nodeId: string; cacheKey: string; error: NodeFailure }
   | { type: 'NODE_RETRY'; nodeId: string }
   | { type: 'HYDRATE_FROM_STORAGE'; graph: Graph };
 
@@ -60,7 +60,7 @@ export const actions = {
     result,
   }),
 
-  nodeFailed: (nodeId: string, cacheKey: string, error: { message: string }): GraphAction => ({
+  nodeFailed: (nodeId: string, cacheKey: string, error: NodeFailure): GraphAction => ({
     type: 'NODE_FAILED',
     nodeId,
     cacheKey,

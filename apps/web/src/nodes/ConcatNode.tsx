@@ -21,7 +21,7 @@ function ConcatNodeImpl({ id, data, selected }: NodeProps<CutgraphNode>) {
         id={id}
         title="Concat"
         status={node.status}
-        errorMessage={node.error?.message}
+        error={node.error}
         targetHandles={CONCAT_HANDLES}
         hasSourceHandle
       >

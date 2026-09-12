@@ -22,7 +22,7 @@ function TrimNodeImpl({ id, data, selected }: NodeProps<CutgraphNode>) {
         id={id}
         title="Trim"
         status={node.status}
-        errorMessage={node.error?.message}
+        error={node.error}
         targetHandles={[{ id: null }]}
         hasSourceHandle
       >

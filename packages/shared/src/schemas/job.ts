@@ -1,4 +1,15 @@
 import { z } from 'zod';
+import { FAILURE_CODES } from '../types';
+import type { NodeFailure } from '../types';
+
+export const FailureCodeEnum = z.enum(FAILURE_CODES);
+
+// The single wire shape for a failure, shared by the SSE job.failed event and the job status
+// response so the two can't drift.
+export const JobErrorSchema = z.object({
+  message: z.string(),
+  code: FailureCodeEnum.optional(),
+});
 
 // The two node types the backend actually orchestrates as jobs.
 export const GenerationNodeTypeSchema = z.enum(['textToImage', 'imageToVideo']);
@@ -41,7 +52,7 @@ export const JobStatusResponseSchema = z.object({
   status: JobStatusEnum,
   cacheKey: z.string(),
   result: JobResultSchema.optional(),
-  error: z.object({ message: z.string() }).optional(),
+  error: JobErrorSchema.optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
@@ -65,7 +76,7 @@ export interface GenerateRequest {
 
 export type GenerateResult =
   | { ok: true; result: JobResult }
-  | { ok: false; error: { message: string; code?: string } };
+  | { ok: false; error: NodeFailure };
 
 export interface GenerateHooks {
   // Called once the job moves from queued (simulated latency) to actually running (simulated

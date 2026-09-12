@@ -1,5 +1,5 @@
-import { actions, deriveCacheKey, incomingEdges, outgoingEdges, topoSort } from '@cutgraph/shared';
-import type { Graph, GraphAction, MediaRef, NodeType } from '@cutgraph/shared';
+import { actions, deriveCacheKey, FailureCodeEnum, incomingEdges, outgoingEdges, topoSort } from '@cutgraph/shared';
+import type { Graph, GraphAction, MediaRef, NodeFailure, NodeType } from '@cutgraph/shared';
 import type { Dispatch } from 'react';
 import type { Executor } from './executors/types';
 
@@ -60,6 +60,16 @@ function resolveUpstream(graph: Graph, nodeId: string): ResolvedUpstream | undef
 
 export function terminalNodeIds(graph: Graph): string[] {
   return Object.keys(graph.nodes).filter((id) => outgoingEdges(graph, id).length === 0);
+}
+
+// Structural rather than instanceof: anything rejecting with a recognized `code` (an ApiError
+// from the job route, say) keeps its taxonomy, and anything else is just a message. Note that a
+// *generation* node's failure has usually already been dispatched with its code by applySseEvent
+// before the executor's rejection reaches here -- the reducer drops this second, poorer copy.
+function failureFromError(err: unknown): NodeFailure {
+  const message = err instanceof Error ? err.message : String(err);
+  const code = FailureCodeEnum.safeParse((err as { code?: unknown } | null)?.code);
+  return code.success ? { message, code: code.data } : { message };
 }
 
 type Limiter = (start: () => Promise<MediaRef>) => Promise<MediaRef>;
@@ -143,7 +153,7 @@ async function executeNode(
   try {
     deps.dispatch(actions.nodeSucceeded(nodeId, cacheKey, await work));
   } catch (err) {
-    deps.dispatch(actions.nodeFailed(nodeId, cacheKey, { message: err instanceof Error ? err.message : String(err) }));
+    deps.dispatch(actions.nodeFailed(nodeId, cacheKey, failureFromError(err)));
   }
 }
 
