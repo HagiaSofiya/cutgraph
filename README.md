@@ -15,7 +15,7 @@ the orchestration layer correct (caching, staleness, partial failure, live statu
 canvas performance) before a single credit gets spent on a real adapter. See
 [Architecture decisions](#architecture-decisions) for why that seam is designed the way it is.
 
-Phase 2 added a real adapter against the Runway Dev API (`CUTGRAPH_ADAPTER=runway`, see
+Phase 2 added a second adapter built against the Runway Dev API (`CUTGRAPH_ADAPTER=runway`, see
 [Runway adapter](#runway-adapter) below). Fixture mode stays the default.
 
 **The Runway adapter has not been run against the live API yet.** Its parameter mapping and error
@@ -137,11 +137,13 @@ are plain, framework-agnostic TypeScript, independently unit-tested without touc
   set without a usable key: the server falls back to fixtures, which used to be visible only as a
   `console.warn` in the server's own terminal, leaving "watching canned clips" and "spending real
   credits" indistinguishable on the canvas. `AdapterBadge.tsx` renders that as a toolbar chip.
-- **Stopping a run actually stops it.** Run hands `runGraph` an `AbortSignal`; Stop aborts it, so
-  no further node starts and every in-flight generation job is cancelled through
-  `DELETE /api/jobs/:id`, which calls Runway's own `tasks.delete` -- otherwise a stopped run keeps
-  generating, and billing, to completion. Client-side (mediabunny) nodes cannot interrupt an
-  encode already in progress, so for them the signal only prevents work that has not started.
+- **Stopping a run cancels in-flight jobs.** Run hands `runGraph` an `AbortSignal`; Stop aborts
+  it, so no further node starts and every in-flight generation job is cancelled through
+  `DELETE /api/jobs/:id`, which calls Runway's own `tasks.delete` -- without it a stopped run
+  would keep generating, and billing, to completion. Whether that call stops the billing is
+  Runway's side of the contract, and is one of the things live verification has yet to confirm.
+  Client-side (mediabunny) nodes cannot interrupt an encode already in progress, so for them the
+  signal only prevents work that has not started.
 - **A job always settles.** `JobRunner` races every `adapter.generate()` against
   `CUTGRAPH_JOB_TIMEOUT_MS`. This is what makes the spend guard's concurrency slot recoverable:
   the slot is released when the adapter settles (or the job is cancelled), and before the timeout
@@ -208,7 +210,7 @@ without it silently ships pointing at localhost.
 
 ## Runway adapter
 
-`CUTGRAPH_ADAPTER=runway` swaps the fixture adapter for a real one against the Runway Dev API
+`CUTGRAPH_ADAPTER=runway` swaps the fixture adapter for one built against the Runway Dev API
 (`@runwayml/sdk`), implementing the same `GenerationAdapter` interface. A missing or empty
 `CUTGRAPH_RUNWAY_API_KEY` logs a loud warning and falls back to fixture mode rather than
 crashing the server.
