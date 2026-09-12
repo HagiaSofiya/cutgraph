@@ -29,7 +29,12 @@ describe('GET /api/health', () => {
   it('returns ok', async () => {
     const res = await app.request('/api/health');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({
+      ok: true,
+      adapter: { requested: 'fixture', active: 'fixture' },
+      models: { textToImage: [], imageToVideo: [] },
+      limits: { maxGenerationsTotal: null, maxConcurrentJobs: null, generationsUsed: 0, inFlight: 0 },
+    });
   });
 });
 

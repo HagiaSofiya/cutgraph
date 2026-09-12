@@ -5,23 +5,34 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { AppConfig } from './config';
 import { loadConfig } from './config';
-import type { GenerationAdapter } from '@cutgraph/shared';
+import type { AdapterKind, GenerationAdapter } from '@cutgraph/shared';
 import { FixtureGenerationAdapter } from './jobs/fixtureAdapter';
 import { JobRunner } from './jobs/jobRunner';
 import { JobStore } from './jobs/jobStore';
 import { RunwayGenerationAdapter } from './jobs/runwayAdapter';
+import { IMAGE_TO_VIDEO_MODELS, TEXT_TO_IMAGE_MODELS } from './jobs/runwayParams';
 import { SpendGuard } from './jobs/spendGuard';
 import { UploadStore } from './media/uploadStore';
 import { createEventsRoute } from './routes/events';
 import { createStaticRoute } from './routes/fixtures';
-import { healthRoute } from './routes/health';
+import type { HealthInfo } from './routes/health';
+import { createHealthRoute } from './routes/health';
 import { createJobsRoute } from './routes/jobs';
 import { createUploadsRoute } from './routes/uploads';
 
-function createAdapter(config: AppConfig, uploadStore: UploadStore): { adapter: GenerationAdapter; isRunway: boolean } {
-  const fixture = () => ({
+interface SelectedAdapter {
+  adapter: GenerationAdapter;
+  active: AdapterKind;
+  models: HealthInfo['models'];
+}
+
+function createAdapter(config: AppConfig, uploadStore: UploadStore): SelectedAdapter {
+  // Fixture "generation" is a hash into a pool of pre-rendered ffmpeg files, so it has no models
+  // to report -- an empty list is what tells the canvas there is no model behind these results.
+  const fixture = (): SelectedAdapter => ({
     adapter: new FixtureGenerationAdapter(config.sim, `${config.publicOrigin}/fixtures`),
-    isRunway: false,
+    active: 'fixture',
+    models: { textToImage: [], imageToVideo: [] },
   });
 
   if (config.adapter !== 'runway') return fixture();
@@ -37,14 +48,16 @@ function createAdapter(config: AppConfig, uploadStore: UploadStore): { adapter: 
   const client = new RunwayML({ apiKey: config.runwayApiKey });
   return {
     adapter: new RunwayGenerationAdapter(client, uploadStore, config.uploadsDir, config.publicOrigin),
-    isRunway: true,
+    active: 'runway',
+    models: { textToImage: [...TEXT_TO_IMAGE_MODELS], imageToVideo: [...IMAGE_TO_VIDEO_MODELS] },
   };
 }
 
 export function createApp(config: AppConfig = loadConfig()) {
   const jobStore = new JobStore(config.jobRetentionMs);
   const uploadStore = new UploadStore(config.uploadsDir, `${config.publicOrigin}/uploads`);
-  const { adapter, isRunway } = createAdapter(config, uploadStore);
+  const { adapter, active, models } = createAdapter(config, uploadStore);
+  const isRunway = active === 'runway';
   const jobRunner = new JobRunner(jobStore, adapter);
 
   // Spend limits only bite for the paid adapter -- fixture mode (the deployed demo, and every
@@ -66,7 +79,10 @@ export function createApp(config: AppConfig = loadConfig()) {
     }),
   );
 
-  app.route('/api/health', healthRoute);
+  app.route(
+    '/api/health',
+    createHealthRoute({ requested: config.adapter ?? 'fixture', active, models }, spendGuard),
+  );
   app.route('/api/jobs', createJobsRoute(jobRunner, jobStore, spendGuard));
   app.route('/api/jobs', createEventsRoute(jobStore));
   app.route('/api/uploads', createUploadsRoute(uploadStore));

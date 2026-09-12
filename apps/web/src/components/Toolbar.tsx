@@ -2,6 +2,7 @@ import { actions } from '@cutgraph/shared';
 import type { NodeType } from '@cutgraph/shared';
 import { useGraph } from '../state/graphContext';
 import { RunButton } from './RunButton';
+import { AdapterBadge } from './AdapterBadge';
 
 const DEFAULT_PARAMS: Record<NodeType, Record<string, unknown>> = {
   imageInput: { sourceName: '', sourceSize: 0, sourceLastModified: 0 },
@@ -43,6 +44,7 @@ export function Toolbar() {
         alignItems: 'center',
       }}
     >
+      <AdapterBadge />
       {(Object.keys(LABELS) as NodeType[]).map((type) => (
         <button key={type} type="button" onClick={() => addNode(type)}>
           + {LABELS[type]}

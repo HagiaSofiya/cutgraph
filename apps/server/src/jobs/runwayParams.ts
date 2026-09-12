@@ -32,6 +32,10 @@ export type Gen45Ratio = '1280:720' | '720:1280' | '1104:832' | '960:960' | '832
 export const TEXT_TO_IMAGE_MODEL = 'gen4_image' as const;
 export const IMAGE_TO_VIDEO_MODEL = 'gen4.5' as const;
 
+// What /api/health reports as runnable, per generation node type.
+export const TEXT_TO_IMAGE_MODELS = [TEXT_TO_IMAGE_MODEL] as const;
+export const IMAGE_TO_VIDEO_MODELS = [IMAGE_TO_VIDEO_MODEL] as const;
+
 // Verified against @runwayml/sdk 4.20.0's TextToImageCreateParams.Gen4Image.ratio. All four of
 // our ratios have an exact pixel-pair match.
 const TEXT_TO_IMAGE_RATIO_MAP: Record<Ratio, Gen4ImageRatio> = {

@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import type { AdapterKind } from '@cutgraph/shared';
 
 export interface SimConfig {
   minLatencyMs: number;
@@ -8,7 +9,7 @@ export interface SimConfig {
   failureRate: number;
 }
 
-export type AdapterKind = 'fixture' | 'runway';
+export type { AdapterKind } from '@cutgraph/shared';
 
 export interface SpendGuardConfig {
   maxGenerationsTotal: number;

@@ -1,5 +1,5 @@
-import { CreateJobResponseSchema, FailureCodeEnum, JobStatusResponseSchema } from '@cutgraph/shared';
-import type { CreateJobResponse, FailureCode, JobStatusResponse, MediaInputRef } from '@cutgraph/shared';
+import { CreateJobResponseSchema, FailureCodeEnum, HealthResponseSchema, JobStatusResponseSchema } from '@cutgraph/shared';
+import type { CreateJobResponse, FailureCode, HealthResponse, JobStatusResponse, MediaInputRef } from '@cutgraph/shared';
 
 // Carries the server's FailureCode alongside the message so a rejected request (the spend
 // guard's 429, say) reaches the canvas with the same taxonomy an SSE job.failed event has.
@@ -58,4 +58,10 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
   const res = await fetch(`${API_BASE}/api/uploads`, { method: 'POST', body: form });
   if (!res.ok) throw await readError(res);
   return res.json();
+}
+
+export async function getHealth(): Promise<HealthResponse> {
+  const res = await fetch(`${API_BASE}/api/health`);
+  if (!res.ok) throw await readError(res);
+  return HealthResponseSchema.parse(await res.json());
 }
