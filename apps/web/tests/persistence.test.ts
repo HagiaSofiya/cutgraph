@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { clearStoredGraph, loadGraph, sanitizeGraphForStorage, saveGraph } from '../src/state/persistence';
+import { createSampleGraph } from '../src/state/sampleGraph';
 import { makeGraph, makeNode, makeResult } from './helpers';
 
 beforeEach(() => {
@@ -134,6 +135,12 @@ describe('saveGraph / loadGraph round trip', () => {
     const loaded = loadGraph();
     expect(loaded?.nodes['trim-1'].result).toBeUndefined();
     expect(loaded?.nodes['trim-1'].status).toBe('stale');
+  });
+
+  it('round-trips the sample graph unchanged (nothing in it trips the sanitizer)', () => {
+    const sample = createSampleGraph();
+    saveGraph(sample);
+    expect(loadGraph()).toEqual(sample);
   });
 
   it('returns undefined when nothing has been saved', () => {

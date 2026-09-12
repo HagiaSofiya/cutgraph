@@ -33,7 +33,10 @@ npm run dev --workspace=@cutgraph/server   # http://localhost:8787
 npm run dev --workspace=@cutgraph/web      # http://localhost:5173
 ```
 
-Open `http://localhost:5173`, add a few nodes from the toolbar, connect them and click **Run**.
+Open `http://localhost:5173`. On a first visit the canvas is seeded with a sample pipeline —
+Text to Image fanning out into two Image to Video branches, concatenated and exported — so
+**Run** is the only click needed to watch the whole thing execute. Build your own by adding
+nodes from the toolbar and connecting them; **Load sample** puts the demo pipeline back.
 
 ## Node types
 
@@ -231,7 +234,7 @@ crashing the server.
 ## Testing
 
 ```bash
-npm test          # 184 tests across all three packages
+npm test          # 192 tests across all three packages
 npm run typecheck
 ```
 
