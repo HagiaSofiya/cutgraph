@@ -26,8 +26,9 @@ that gap; see [Testing](#testing).
 
 ## Quick start
 
-Requires Node 20.19+ or 22.12+ (the floor is Vite 8's, not this project's own) and `ffmpeg` on
-your `PATH` (used once, offline, to generate fixture media).
+Requires Node 22.22.2+ (or 24.15+, or 26+) and `ffmpeg` on your `PATH` (used once, offline, to
+generate fixture media). That floor is jsdom 30's and only the test suite needs it -- running the
+app alone works on Node 20.19+, which is Vite 8's floor, but `npm test` does not.
 
 ```bash
 npm install
@@ -266,9 +267,10 @@ npm test          # 194 tests across all three packages
 npm run typecheck
 ```
 
-Every push and pull request runs `npm run typecheck` and `npm test` on Node 20 and 24
-(`.github/workflows/ci.yml`). No ffmpeg step: nothing under test reads the generated fixture
-media.
+Every push and pull request runs `npm run typecheck` and `npm test` on Node 22.22.2 and 24
+(`.github/workflows/ci.yml`). The lower version is pinned to the exact floor documented above
+rather than to the latest 22.x, so CI proves that claim instead of assuming it. No ffmpeg step:
+nothing under test reads the generated fixture media.
 
 No test makes a real Runway API call or spends a credit: the param mapping tables, the error
 taxonomy and the spend guard are unit-tested directly, and the adapter itself is tested against
