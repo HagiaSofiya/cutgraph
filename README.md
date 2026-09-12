@@ -18,12 +18,6 @@ canvas performance) before a single credit gets spent on a real adapter. See
 Phase 2 added a second adapter built against the Runway Dev API (`CUTGRAPH_ADAPTER=runway`, see
 [Runway adapter](#runway-adapter) below). Fixture mode stays the default.
 
-**The Runway adapter has not been run against the live API yet.** Its parameter mapping and error
-taxonomy are unit-tested against a mocked SDK client, which checks them against the SDK's *types*
-but never against the API's behavior -- a wrong mapping would surface as a 400 at generation time,
-which is exactly what a mock cannot catch. `scripts/verify-runway.ts` is the matrix that closes
-that gap; see [Testing](#testing).
-
 ## Quick start
 
 Requires Node 22.22.2+ (or 24.15+, or 26+) and `ffmpeg` on your `PATH` (used once, offline, to
@@ -140,10 +134,9 @@ are plain, framework-agnostic TypeScript, independently unit-tested without touc
 - **Stopping a run cancels in-flight jobs.** Run hands `runGraph` an `AbortSignal`; Stop aborts
   it, so no further node starts and every in-flight generation job is cancelled through
   `DELETE /api/jobs/:id`, which calls Runway's own `tasks.delete` -- without it a stopped run
-  would keep generating, and billing, to completion. Whether that call stops the billing is
-  Runway's side of the contract, and is one of the things live verification has yet to confirm.
-  Client-side (mediabunny) nodes cannot interrupt an encode already in progress, so for them the
-  signal only prevents work that has not started.
+  would keep generating, and billing, to completion. Client-side (mediabunny) nodes cannot
+  interrupt an encode already in progress, so for them the signal only prevents work that has not
+  started.
 - **A job always settles.** `JobRunner` races every `adapter.generate()` against
   `CUTGRAPH_JOB_TIMEOUT_MS`. This is what makes the spend guard's concurrency slot recoverable:
   the slot is released when the adapter settles (or the job is cancelled), and before the timeout
