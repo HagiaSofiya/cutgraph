@@ -1,4 +1,5 @@
 import { actions, graphReducer } from '@cutgraph/shared';
+import type { MediaRef, NodeType } from '@cutgraph/shared';
 import { describe, expect, it } from 'vitest';
 import type { Executor, ExecutorContext } from '../src/orchestrator/executors/types';
 import { createRunGraph, retryNode, terminalNodeIds } from '../src/orchestrator/runGraph';
@@ -23,6 +24,37 @@ function createHarness(initialGraph: ReturnType<typeof makeGraph>) {
     graph = graphReducer(graph, action);
   };
   return { getGraph: () => graph, dispatch };
+}
+
+function everyNodeType(executor: Executor): Record<NodeType, Executor> {
+  return {
+    imageInput: executor,
+    textToImage: executor,
+    imageToVideo: executor,
+    trim: executor,
+    concat: executor,
+    export: executor,
+  };
+}
+
+// Lets a test drain the microtask queue and then assert on what has *started* while nothing has
+// been allowed to finish -- the only way to tell concurrent execution from sequential execution.
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function deferredExecutor() {
+  const started: string[] = [];
+  const resolvers = new Map<string, (result: MediaRef) => void>();
+  const executor: Executor = {
+    run: (ctx) =>
+      new Promise<MediaRef>((resolve) => {
+        started.push(ctx.node.id);
+        ctx.dispatch(actions.nodeRunning(ctx.node.id, ctx.cacheKey));
+        resolvers.set(ctx.node.id, resolve);
+      }),
+  };
+  return { executor, started, finish: (id: string) => resolvers.get(id)!(makeResult(`r-${id}`)) };
 }
 
 describe('runGraph', () => {
@@ -214,5 +246,125 @@ describe('runGraph', () => {
     resolveRun?.();
     await firstRun;
     expect(harness.getGraph().nodes.a.status).toBe('succeeded');
+  });
+  it('runs independent branches concurrently, and starts their join only once both have settled', async () => {
+    // The sample pipeline's shape: one already-succeeded source fanning out into two legs that
+    // both feed a concat.
+    const graph = makeGraph(
+      [
+        makeNode({ id: 'src', type: 'textToImage', status: 'succeeded', result: makeResult('r-src'), cacheKey: 'r-src' }),
+        makeNode({ id: 'a', type: 'imageToVideo', params: { prompt: 'dolly', duration: 4, ratio: '16:9' } }),
+        makeNode({ id: 'b', type: 'imageToVideo', params: { prompt: 'pan', duration: 4, ratio: '16:9' } }),
+        makeNode({ id: 'concat', type: 'concat' }),
+      ],
+      [
+        makeEdge({ id: 'sa', source: 'src', target: 'a' }),
+        makeEdge({ id: 'sb', source: 'src', target: 'b' }),
+        makeEdge({ id: 'ac', source: 'a', target: 'concat', targetHandle: 'in-0' }),
+        makeEdge({ id: 'bc', source: 'b', target: 'concat', targetHandle: 'in-1' }),
+      ],
+    );
+
+    const { executor, started, finish } = deferredExecutor();
+    const harness = createHarness(graph);
+    const run = createRunGraph();
+    const runPromise = run(['concat'], {
+      getGraph: harness.getGraph,
+      dispatch: harness.dispatch,
+      executors: everyNodeType(executor),
+    });
+
+    await flush();
+    // Sequentially only 'a' would have started: 'b' would still be waiting for it to finish.
+    expect(started).toEqual(['a', 'b']);
+    expect(harness.getGraph().nodes.a.status).toBe('running');
+    expect(harness.getGraph().nodes.b.status).toBe('running');
+
+    finish('a');
+    await flush();
+    expect(started).toEqual(['a', 'b']); // concat still blocked on the other leg
+
+    finish('b');
+    await flush();
+    expect(started).toEqual(['a', 'b', 'concat']);
+
+    finish('concat');
+    await runPromise;
+    expect(harness.getGraph().nodes.concat.status).toBe('succeeded');
+  });
+
+  it('never runs more nodes at once than maxConcurrency', async () => {
+    const ids = ['n1', 'n2', 'n3', 'n4'];
+    const graph = makeGraph(
+      // Distinct params so no two share a cache key -- this is a test about slots, nothing else.
+      ids.map((id, i) => makeNode({ id, type: 'trim', params: { start: i, end: i + 1 } })),
+    );
+
+    let active = 0;
+    let peak = 0;
+    const pending: Array<() => void> = [];
+    const executor: Executor = {
+      run: (ctx) =>
+        new Promise<MediaRef>((resolve) => {
+          active += 1;
+          peak = Math.max(peak, active);
+          ctx.dispatch(actions.nodeRunning(ctx.node.id, ctx.cacheKey));
+          pending.push(() => {
+            active -= 1;
+            resolve(makeResult(`r-${ctx.node.id}`));
+          });
+        }),
+    };
+
+    const harness = createHarness(graph);
+    const run = createRunGraph();
+    const runPromise = run(ids, {
+      getGraph: harness.getGraph,
+      dispatch: harness.dispatch,
+      executors: everyNodeType(executor),
+      maxConcurrency: 2,
+    });
+
+    await flush();
+    expect(active).toBe(2); // the other two are queued, waiting for a slot
+    expect(harness.getGraph().nodes.n3.status).toBe('queued');
+
+    while (pending.length) {
+      pending.shift()!();
+      await flush();
+    }
+    await runPromise;
+
+    expect(peak).toBe(2);
+    for (const id of ids) expect(harness.getGraph().nodes[id].status).toBe('succeeded');
+  });
+
+  it('two generation nodes sharing a cache key generate once and share the result', async () => {
+    // Same type, same params, same upstream output => byte-identical cache keys. Sequentially
+    // the second was a free cache hit; concurrently it must join the first rather than pay again.
+    const params = { prompt: 'the same prompt', duration: 4, ratio: '16:9' };
+    const graph = makeGraph(
+      [
+        makeNode({ id: 'src', type: 'textToImage', status: 'succeeded', result: makeResult('r-src'), cacheKey: 'r-src' }),
+        makeNode({ id: 'x', type: 'imageToVideo', params }),
+        makeNode({ id: 'y', type: 'imageToVideo', params }),
+      ],
+      [makeEdge({ id: 'sx', source: 'src', target: 'x' }), makeEdge({ id: 'sy', source: 'src', target: 'y' })],
+    );
+
+    const { executor, calls } = makeExecutor({ ok: true, result: makeResult('r-shared') });
+    const harness = createHarness(graph);
+    const run = createRunGraph();
+    await run(['x', 'y'], {
+      getGraph: harness.getGraph,
+      dispatch: harness.dispatch,
+      executors: everyNodeType(executor),
+    });
+
+    expect(calls).toHaveLength(1); // one generation, not two
+    const finalGraph = harness.getGraph();
+    expect(finalGraph.nodes.x.status).toBe('succeeded');
+    expect(finalGraph.nodes.y.status).toBe('succeeded');
+    expect(finalGraph.nodes.y.result?.id).toBe(finalGraph.nodes.x.result?.id);
   });
 });

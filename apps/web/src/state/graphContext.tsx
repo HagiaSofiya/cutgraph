@@ -7,8 +7,8 @@ import { reconcileInFlightJobs } from './reconciliation';
 interface GraphContextValue {
   graph: Graph;
   // Synchronously applies the reducer to a ref *before* also telling React about it (see
-  // dispatchRef below) -- runGraph dispatches a terminal action for one node and, with no
-  // `await` before the next loop iteration, immediately calls getGraph() again. React's own
+  // dispatchRef below) -- runGraph dispatches a terminal action for one node, and the downstream
+  // node waiting on it wakes in the very next microtask and calls getGraph(). React's own
   // dispatch only re-renders on its own schedule, so relying on it alone left getGraph()
   // returning a stale graph (an already-succeeded upstream still reading as not-ready) for
   // exactly that race.

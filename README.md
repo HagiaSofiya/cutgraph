@@ -92,6 +92,19 @@ are plain, framework-agnostic TypeScript, independently unit-tested without touc
   still derives byte-identical keys. Editing one node recomputes it and everything downstream;
   unrelated nodes keep their keys and never re-run, and edit-and-revert is an instant cache hit
   since the old key is still in `Graph.resultCache`.
+- **Parallel branches.** `apps/web/src/orchestrator/runGraph.ts` gives every node in the run its
+  own promise and starts it as soon as its *own* upstreams have settled, rather than walking the
+  topological order one node at a time -- so the sample pipeline's two Image to Video legs
+  overlap instead of running back to back. Concurrency is capped (default 3, mirroring the
+  server's `CUTGRAPH_MAX_CONCURRENT_JOBS`) because past that limit the spend guard answers 429
+  and a 429 *fails* a node rather than queuing it; a node waiting for a slot sits in `queued`,
+  which is exactly what that state already means. Slots are held only during execution, never
+  while waiting on an upstream, which together with an acyclic graph is what keeps the scheduler
+  deadlock-free. Two generation nodes that derive the *same* cache key join one in-flight run
+  instead of both paying for it -- the free cache hit sequential execution used to give the
+  second one. That join is deliberately limited to the two backend-generated types, whose entire
+  input is the cache-key preimage: an `ImageInput`'s real input is the file in `blobStore` under
+  its own node id, which no cache key describes.
 - **Partial failure and staleness.** `packages/shared/src/reducer/graphReducer.ts` is a pure
   reducer over an explicit six-state machine (`idle | queued | running | succeeded | failed |
   stale`). `markStaleIfMeaningful` only invalidates a node that has something to invalidate (a

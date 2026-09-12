@@ -3,10 +3,25 @@ import type { Graph, GraphAction, MediaRef, NodeType } from '@cutgraph/shared';
 import type { Dispatch } from 'react';
 import type { Executor } from './executors/types';
 
+// Mirrors the server's own CUTGRAPH_MAX_CONCURRENT_JOBS default. With the paid adapter selected
+// POST /api/jobs answers 429 past that many in-flight generations, and a 429 *fails* the node
+// rather than queuing it -- so an uncapped fan-out would turn extra parallelism straight into
+// failed nodes. Client-side executors count against the same budget: trim/concat/export are
+// WebCodecs work, and an unbounded number of those at once is its own problem.
+const DEFAULT_MAX_CONCURRENCY = 3;
+
+// The node types whose entire input *is* the cache-key preimage (type + params + upstream output
+// ids), so two nodes sharing a key are interchangeable and one run can serve both -- see the
+// join in executeNode. Deliberately not every type: an ImageInput's real input is the file held
+// in blobStore under its own node id, which no cache key describes, so two of those must stay
+// independent even when their params match.
+const DEDUPED_BY_CACHE_KEY: ReadonlySet<NodeType> = new Set<NodeType>(['textToImage', 'imageToVideo']);
+
 export interface RunGraphDeps {
   getGraph: () => Graph;
   dispatch: Dispatch<GraphAction>;
   executors: Record<NodeType, Executor>;
+  maxConcurrency?: number;
 }
 
 interface ResolvedUpstream {
@@ -47,6 +62,91 @@ export function terminalNodeIds(graph: Graph): string[] {
   return Object.keys(graph.nodes).filter((id) => outgoingEdges(graph, id).length === 0);
 }
 
+type Limiter = (start: () => Promise<MediaRef>) => Promise<MediaRef>;
+
+// Minimal FIFO semaphore. On release the slot is *handed* to the next waiter rather than
+// decremented and re-acquired: a woken waiter only resumes a microtask later, and a caller
+// arriving inside that window would otherwise slip into the free slot and push us over `max`.
+function createLimiter(max: number): Limiter {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+
+  return async (start) => {
+    if (active >= max) await new Promise<void>((resolve) => waiting.push(resolve));
+    else active += 1;
+
+    try {
+      return await start();
+    } finally {
+      const next = waiting.shift();
+      if (next) next();
+      else active -= 1;
+    }
+  };
+}
+
+// One node's whole lifecycle, read against a *fresh* graph: by the time this runs, every
+// upstream has settled and dispatched. Never rejects -- an executor failure becomes NODE_FAILED
+// and leaves sibling branches alone, exactly as it did when this was a sequential loop body.
+async function executeNode(
+  nodeId: string,
+  deps: RunGraphDeps,
+  limit: Limiter,
+  inFlightByCacheKey: Map<string, Promise<MediaRef>>,
+): Promise<void> {
+  const graph = deps.getGraph();
+  const node = graph.nodes[nodeId];
+  if (!node) return;
+  if (node.status !== 'idle' && node.status !== 'stale' && node.status !== 'failed') return;
+
+  const resolved = resolveUpstream(graph, nodeId);
+  if (!resolved) return; // blocked by an unresolved (or failed) upstream
+
+  const cacheKey = deriveCacheKey({
+    nodeType: node.type,
+    params: node.params as Record<string, unknown>,
+    upstream: resolved.cacheKeyEntries,
+  });
+
+  const cached = graph.resultCache[cacheKey];
+  if (cached) {
+    // Instant hit -- e.g. an edit-and-revert. Still walked through queued/running so
+    // the reducer's precondition chain accepts the terminal transition.
+    deps.dispatch(actions.nodeQueued(nodeId, cacheKey));
+    deps.dispatch(actions.nodeRunning(nodeId, cacheKey));
+    deps.dispatch(actions.nodeSucceeded(nodeId, cacheKey, cached));
+    return;
+  }
+
+  // Dispatched before a concurrency slot is acquired on purpose: a node waiting its turn is
+  // precisely what 'queued' means, and the canvas already renders it as such.
+  deps.dispatch(actions.nodeQueued(nodeId, cacheKey));
+
+  // Two sibling generation nodes with the same params and the same upstream output derive the
+  // *same* cache key. Sequentially the second was a free cache hit -- the first had already
+  // populated resultCache by the time it was reached -- but concurrently both miss, and both
+  // pay. Joining the in-flight promise preserves the one-generation-per-cache-key guarantee the
+  // spend guard rests on. A joined failure is shared too; retry is still per-node.
+  const sharedKey = DEDUPED_BY_CACHE_KEY.has(node.type) ? cacheKey : undefined;
+  let work = sharedKey ? inFlightByCacheKey.get(sharedKey) : undefined;
+  if (work) {
+    // A joining node makes no executor call of its own, so nothing else will dispatch
+    // NODE_RUNNING for it -- and NODE_SUCCEEDED is only accepted from 'running'.
+    deps.dispatch(actions.nodeRunning(nodeId, cacheKey));
+  } else {
+    const executor = deps.executors[node.type];
+    work = limit(() => executor.run({ node, upstream: resolved.refs, cacheKey, dispatch: deps.dispatch }));
+    // Set synchronously -- no await between the get above and this, so siblings can't both miss.
+    if (sharedKey) inFlightByCacheKey.set(sharedKey, work);
+  }
+
+  try {
+    deps.dispatch(actions.nodeSucceeded(nodeId, cacheKey, await work));
+  } catch (err) {
+    deps.dispatch(actions.nodeFailed(nodeId, cacheKey, { message: err instanceof Error ? err.message : String(err) }));
+  }
+}
+
 // A fresh runGraph per instance, each with its own re-entrancy guard -- a bare module-level
 // flag would let one test's hung promise silently swallow the next test's call. The real app
 // uses a single shared instance (see the exported `runGraph` below); tests make their own.
@@ -57,43 +157,32 @@ export function createRunGraph() {
     if (runInFlight) return; // a real TOCTOU window the reducer alone can't close
     runInFlight = true;
     try {
-      const order = topoSort(deps.getGraph(), targetNodeIds);
+      const graph = deps.getGraph();
+      const order = topoSort(graph, targetNodeIds);
+      const limit = createLimiter(deps.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY);
+      const inFlightByCacheKey = new Map<string, Promise<MediaRef>>();
 
+      // One promise per node, settling when that node reaches a terminal state (or is skipped).
+      // Each node waits on its own upstreams rather than on every node earlier in the
+      // topological order, so independent branches -- the sample pipeline's two Image to Video
+      // legs, say -- overlap instead of running back to back. Acyclic plus "slots are only held
+      // during execution, never while waiting on an upstream" is what keeps this deadlock-free.
+      const settled = new Map<string, Promise<void>>();
       for (const nodeId of order) {
-        const graph = deps.getGraph();
-        const node = graph.nodes[nodeId];
-        if (!node) continue;
-        if (node.status !== 'idle' && node.status !== 'stale' && node.status !== 'failed') continue;
-
-        const resolved = resolveUpstream(graph, nodeId);
-        if (!resolved) continue; // blocked by an unresolved (or failed) upstream
-
-        const cacheKey = deriveCacheKey({
-          nodeType: node.type,
-          params: node.params as Record<string, unknown>,
-          upstream: resolved.cacheKeyEntries,
-        });
-
-        const cached = graph.resultCache[cacheKey];
-        if (cached) {
-          // Instant hit -- e.g. an edit-and-revert. Still walked through queued/running so
-          // the reducer's precondition chain accepts the terminal transition.
-          deps.dispatch(actions.nodeQueued(nodeId, cacheKey));
-          deps.dispatch(actions.nodeRunning(nodeId, cacheKey));
-          deps.dispatch(actions.nodeSucceeded(nodeId, cacheKey, cached));
-          continue;
-        }
-
-        deps.dispatch(actions.nodeQueued(nodeId, cacheKey));
-        try {
-          const executor = deps.executors[node.type];
-          const result = await executor.run({ node, upstream: resolved.refs, cacheKey, dispatch: deps.dispatch });
-          deps.dispatch(actions.nodeSucceeded(nodeId, cacheKey, result));
-        } catch (err) {
-          // Does not abort the loop -- independent branches keep going.
-          deps.dispatch(actions.nodeFailed(nodeId, cacheKey, { message: err instanceof Error ? err.message : String(err) }));
-        }
+        // Topological order guarantees every in-run upstream already has an entry here.
+        const upstream = incomingEdges(graph, nodeId)
+          .map((edge) => edge.source)
+          .filter((id) => settled.has(id));
+        settled.set(
+          nodeId,
+          (async () => {
+            await Promise.all(upstream.map((id) => settled.get(id)));
+            await executeNode(nodeId, deps, limit, inFlightByCacheKey);
+          })(),
+        );
       }
+
+      await Promise.all(settled.values());
     } finally {
       runInFlight = false;
     }
