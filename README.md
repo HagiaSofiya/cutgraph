@@ -82,67 +82,36 @@ scripts/generate-fixtures.mjs   offline ffmpeg script that seeds apps/server/fix
 React is a thin layer here on purpose: the reducer, cache-key derivation and run orchestrator
 are plain, framework-agnostic TypeScript, independently unit-tested without touching a DOM.
 
-## The four things this proves
-
-### 1. Per-node result caching
-
-`packages/shared/src/cache/cacheKey.ts` derives a node's cache key from its type, its own
-params and its *resolved* upstream output ids. It hashes with SHA-256 (truncated) rather than
-a weaker algorithm, because `MediaRef.id` *is* the cache key: a collision would serve the wrong
-media, not just waste a demo run. Upstream ordering is canonicalized inside the function itself
-(sorted by handle, not by call-site array order), so a graph rebuilt from localStorage in a
-different insertion order still derives byte-identical keys.
-
-The result cache (`Graph.resultCache`, keyed by cache key rather than by node) means:
-- Editing shot 3's prompt recomputes shot 3 and everything downstream of it; shots 1 and 2
-  keep byte-identical keys and are never re-run.
-- **Edit-and-revert is an instant cache hit.** Change a prompt, change it back: the old key is
-  still in the cache, so the node resolves immediately with no re-generation.
-- A generation that completes *after* the user has already edited that node's params still
-  lands in the result cache (in case they revert), even though the node itself stays stale.
-
-### 2. Partial failure and staleness
-
-`packages/shared/src/reducer/graphReducer.ts` is a pure reducer over an explicit six-state
-machine (`idle | queued | running | succeeded | failed | stale`). Two invariants do most of the
-work:
-
-- **`markStaleIfMeaningful`**: a node only becomes stale if it has something to invalidate (a
-  retained result, or an in-flight run). A never-run node stays idle.
-- **cacheKey-echo guard**: every lifecycle action carries the cache key its run was launched
-  with, and a terminal transition is only applied if that key still matches. This one
-  precondition makes three different races safe for free: an edit landing mid-run, a duplicate
-  SSE delivery and replay during refresh reconciliation.
-
-A failed node retains its last-succeeded result (visible, not discarded) and is retried
-independently via `orchestrator/runGraph.ts`'s `retryNode`, which does **not** cascade forward
-into that node's stale descendants, so a retry can't silently trigger several downstream paid
-generations once a real adapter is in place.
-
-### 3. Streaming status
-
-The backend only orchestrates the two generation node types (`TextToImage`, `ImageToVideo`) as
-jobs; everything else executes client-side. `apps/server/src/sse/sseHub.ts` buffers each job's
-last 3 events (queued/running/terminal) and replays them on (re)connect: via the
-`Last-Event-ID` header on the browser's own automatic reconnect, or a `?lastEventId=` query
-param for a fresh page load, which can't set that header itself.
-
-On boot, `apps/web/src/state/reconciliation.ts` finds every node still queued/running with a
-live job id, fetches its current status and either applies an already-terminal result directly
-or resumes the SSE subscription. This was verified against a real ~25-second job that survived
-a full page reload.
-
-### 4. Canvas performance
-
-A twelve-node graph never holds twelve decoded `<video>` elements. `MediaPreview.tsx` renders a
-poster `<img>` by default (extracted via mediabunny's `CanvasSink`) and mounts a real `<video>`
-only while that node is hovered or selected. `canvas/reconcileFlowNodes.ts` is a pure function
-that diffs the logical graph against xyflow's node array and only replaces the `data` reference
-for nodes that actually changed; every custom node component is wrapped in `React.memo`, so an
-unrelated node's status change doesn't re-render the other eleven.
-
 ## Architecture decisions
 
+- **Per-node result caching.** `packages/shared/src/cache/cacheKey.ts` derives a node's cache
+  key from its type, its own params and its *resolved* upstream output ids, hashed with SHA-256
+  (truncated) since `MediaRef.id` *is* the cache key and a collision would serve the wrong
+  media. Upstream ordering is canonicalized inside the function itself (sorted by handle, not
+  call-site array order), so a graph rebuilt from localStorage in a different insertion order
+  still derives byte-identical keys. Editing one node recomputes it and everything downstream;
+  unrelated nodes keep their keys and never re-run, and edit-and-revert is an instant cache hit
+  since the old key is still in `Graph.resultCache`.
+- **Partial failure and staleness.** `packages/shared/src/reducer/graphReducer.ts` is a pure
+  reducer over an explicit six-state machine (`idle | queued | running | succeeded | failed |
+  stale`). `markStaleIfMeaningful` only invalidates a node that has something to invalidate (a
+  retained result or an in-flight run), and a cacheKey-echo guard on every lifecycle action
+  makes an edit landing mid-run, a duplicate SSE delivery and reconciliation replay all safe for
+  free. A failed node keeps its last-succeeded result and retries independently via
+  `retryNode`, which does **not** cascade into that node's stale descendants, so a retry can't
+  silently trigger several downstream paid generations.
+- **Streaming status.** The backend only orchestrates the two generation node types as jobs;
+  `apps/server/src/sse/sseHub.ts` buffers each job's last 3 events and replays them on
+  (re)connect, via the `Last-Event-ID` header on the browser's own automatic reconnect or a
+  `?lastEventId=` query param for a fresh page load. On boot, `apps/web/src/state/reconciliation.ts`
+  finds every node still queued/running, fetches its current status and either applies an
+  already-terminal result or resumes the SSE subscription; verified against a real ~25-second
+  job that survived a full page reload.
+- **Canvas performance.** `MediaPreview.tsx` renders a poster `<img>` by default and mounts a
+  real `<video>` only while that node is hovered or selected, so a twelve-node graph never holds
+  twelve decoded video elements. `canvas/reconcileFlowNodes.ts` only replaces the `data`
+  reference for nodes that actually changed, and every node component is wrapped in
+  `React.memo`, so one node's status change doesn't re-render the others.
 - **Execution split.** The backend only ever sees the two node types that would eventually call
   a paid API. `ImageInput`, `Trim`, `Concat` and `Export` run entirely in the browser via
   mediabunny, moving through the same reducer with no network round-trip.
