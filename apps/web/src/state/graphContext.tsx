@@ -1,8 +1,9 @@
-import { emptyGraph, graphReducer } from '@cutgraph/shared';
+import { graphReducer } from '@cutgraph/shared';
 import type { Graph, GraphAction } from '@cutgraph/shared';
 import { createContext, useContext, useEffect, useReducer, useRef, type Dispatch, type ReactNode } from 'react';
 import { loadGraph, saveGraph } from './persistence';
 import { reconcileInFlightJobs } from './reconciliation';
+import { createSampleGraph } from './sampleGraph';
 
 interface GraphContextValue {
   graph: Graph;
@@ -19,7 +20,11 @@ interface GraphContextValue {
 const GraphContext = createContext<GraphContextValue | undefined>(undefined);
 
 export function GraphProvider({ children }: { children: ReactNode }) {
-  const [graph, reactDispatch] = useReducer(graphReducer, undefined, () => loadGraph() ?? emptyGraph());
+  // The only hook point for "is this a first visit?": the saveGraph effect below writes the
+  // storage key on mount, so from render #2 onward an absent key is indistinguishable from a
+  // deliberately emptied canvas. An empty *stored* graph is still a stored graph, so a user who
+  // cleared their nodes never gets the sample pushed back on them.
+  const [graph, reactDispatch] = useReducer(graphReducer, undefined, () => loadGraph() ?? createSampleGraph());
   const graphRef = useRef(graph);
   graphRef.current = graph;
 

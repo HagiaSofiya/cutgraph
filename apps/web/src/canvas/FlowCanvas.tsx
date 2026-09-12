@@ -3,7 +3,6 @@ import {
   Background,
   Controls,
   ReactFlow,
-  ReactFlowProvider,
   useEdgesState,
   useNodesState,
   type Connection,
@@ -18,7 +17,7 @@ import { nodeTypes } from './nodeTypes';
 import type { CutgraphNode } from './types';
 import { useSyncNodeData } from './useSyncNodeData';
 
-function FlowCanvasInner() {
+export function FlowCanvas() {
   const { graph, dispatch } = useGraph();
   const [nodes, setNodes, onNodesChangeInternal] = useNodesState<CutgraphNode>([]);
   const [edges, setEdges, onEdgesChangeInternal] = useEdgesState<Edge>([]);
@@ -81,13 +80,5 @@ function FlowCanvasInner() {
         <Controls />
       </ReactFlow>
     </div>
-  );
-}
-
-export function FlowCanvas() {
-  return (
-    <ReactFlowProvider>
-      <FlowCanvasInner />
-    </ReactFlowProvider>
   );
 }
