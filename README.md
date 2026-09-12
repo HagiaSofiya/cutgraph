@@ -4,12 +4,18 @@ A node-based editor for generative video workflows: a small DAG canvas, in the s
 ComfyUI, but for generative clips. Build a graph of image/video generation and editing steps,
 run it and watch each node's status stream in live.
 
-Everything currently runs in *fixture mode*: no real generation API is called. Generation
-nodes resolve to local canned clips after a simulated delay, with a configurable failure rate,
-behind one swappable adapter interface. The point is to prove the orchestration layer correct
-(caching, staleness, partial failure, live status streaming, canvas performance) before a
-single credit gets spent on a real adapter. See [Architecture decisions](#architecture-decisions)
-for why that seam is designed the way it is.
+![A Text to Image node in Cutgraph, showing a prompt, ratio and a succeeded generation](docs/screenshot.png)
+
+Generation nodes run behind one swappable adapter interface. By default the server runs in
+*fixture mode*: no real generation API is called, nodes resolve to local canned clips after a
+simulated delay with a configurable failure rate. That's what the point of Phase 1 was: prove
+the orchestration layer correct (caching, staleness, partial failure, live status streaming,
+canvas performance) before a single credit gets spent on a real adapter. See
+[Architecture decisions](#architecture-decisions) for why that seam is designed the way it is.
+
+Phase 2 added a real adapter against the Runway Dev API (`CUTGRAPH_ADAPTER=runway`, see
+[Runway adapter](#runway-adapter) below). Fixture mode stays the default; the deployed demo runs
+fixture mode.
 
 ## Quick start
 
@@ -57,7 +63,8 @@ packages/shared/     framework-agnostic core: no React, no server deps
   src/cache/            stable hashing + cache-key derivation
 
 apps/server/          Hono backend, orchestrates generation jobs only
-  src/jobs/              fixtureAdapter (the swappable seam), jobRunner, jobStore
+  src/jobs/              fixtureAdapter + runwayAdapter (the swappable seam), jobRunner, jobStore,
+                         spendGuard
   src/sse/               sseHub, replay-buffered SSE streaming
   src/routes/            jobs, events (SSE), uploads, static fixture/upload serving
   fixtures/              generated media (gitignored; see `npm run generate-fixtures`)
@@ -156,25 +163,66 @@ unrelated node's status change doesn't re-render the other eleven.
   track by hand and manually pumps decoded samples from each input in order, rewriting each
   sample's timestamp by a running cumulative offset.
 
-## Fixture mode configuration
+## Configuration
 
 Env vars for `apps/server` (all optional):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CUTGRAPH_SIM_MIN_LATENCY_MS` / `_MAX_LATENCY_MS` | 400 / 1200 | simulated queue latency before a job starts running |
-| `CUTGRAPH_SIM_MIN_PROCESSING_MS` / `_MAX_PROCESSING_MS` | 1500 / 4000 | simulated generation time |
-| `CUTGRAPH_SIM_FAILURE_RATE` | 0.15 | probability a job fails |
+| `CUTGRAPH_ADAPTER` | `fixture` | `fixture` or `runway` |
+| `CUTGRAPH_SIM_MIN_LATENCY_MS` / `_MAX_LATENCY_MS` | 400 / 1200 | simulated queue latency before a job starts running (fixture only) |
+| `CUTGRAPH_SIM_MIN_PROCESSING_MS` / `_MAX_PROCESSING_MS` | 1500 / 4000 | simulated generation time (fixture only) |
+| `CUTGRAPH_SIM_FAILURE_RATE` | 0.15 | probability a job fails (fixture only) |
 | `CUTGRAPH_JOB_RETENTION_MS` | 600000 | how long a finished job stays queryable |
 | `PORT` | 8787 | server port |
-| `CUTGRAPH_PUBLIC_ORIGIN` | `http://localhost:<PORT>` | base URL used to build fixture/upload links |
+| `CUTGRAPH_PUBLIC_ORIGIN` | `http://localhost:<PORT>` | base URL used to build fixture/upload/output links |
+| `CUTGRAPH_RUNWAY_API_KEY` | none | Runway Dev API key, server-side only, never sent to the browser |
+| `CUTGRAPH_MAX_GENERATIONS_TOTAL` | 50 | per-process cap on total generations (runway only) |
+| `CUTGRAPH_MAX_CONCURRENT_JOBS` | 3 | per-process cap on in-flight generations (runway only) |
+
+## Runway adapter
+
+`CUTGRAPH_ADAPTER=runway` swaps the fixture adapter for a real one against the Runway Dev API
+(`@runwayml/sdk`), implementing the same `GenerationAdapter` interface. A missing or empty
+`CUTGRAPH_RUNWAY_API_KEY` logs a loud warning and falls back to fixture mode rather than
+crashing the server.
+
+- **Models.** Text to Image uses `gen4_image`; Image to Video uses `gen4.5`. Both were chosen to
+  fit our schemas as-is (prompt-only text-to-image with no reference images; single-image,
+  prompt + duration + ratio image-to-video) rather than for being the newest or cheapest option.
+- **Ratio mapping.** Our four ratios (`1:1`, `16:9`, `9:16`, `4:3`) map to explicit pixel-pair
+  strings, verified against the SDK's own literal types rather than assumed
+  (`apps/server/src/jobs/runwayParams.ts`). Three of four are exact matches for both models;
+  `4:3` on Image to Video has no exact pixel pair in gen4.5's ratio set and uses the nearest
+  available (`1104:832`, ~0.5% off true 4:3) as a documented approximation.
+- **Duration.** gen4.5 accepts an integer from 2 to 10, matching our schema's existing range;
+  fractional input is rounded to the nearest integer, not truncated.
+- **Input reachability.** Runway fetches input images server-side, so a `http://localhost/...`
+  upload URL is unreachable to it. A URL under our own uploads is read straight off disk and
+  sent as a base64 data URI instead (capped at Runway's ~3.5MB raw limit, refused with a clear
+  error above that rather than silently truncated); any other URL passes through unchanged.
+- **Output persistence.** Runway's own output URLs expire in 24-48h. The adapter downloads and
+  stores the bytes through the same content-addressed upload store uploads already use, so
+  `JobResult.url` stays a stable, persistent URL rather than a link that rots after a couple of
+  days.
+- **Failure taxonomy.** Content moderation rejections, task failures, rate limits, timeouts and
+  auth/billing errors are mapped to distinct, actionable messages
+  (`apps/server/src/jobs/runwayErrors.ts`).
+- **Spend guard.** `POST /api/jobs` rejects with 429 once either per-process limit is hit,
+  before a job is ever queued. Only active when the runway adapter is actually selected; fixture
+  mode (and every existing test) is unaffected.
 
 ## Testing
 
 ```bash
-npm test          # 125 tests across all three packages
+npm test          # 154 tests across all three packages
 npm run typecheck
 ```
+
+No test makes a real Runway API call or spends a credit: the param mapping tables, the error
+taxonomy and the spend guard are unit-tested directly, and the adapter itself is tested against
+a mocked SDK client. Verification against the live API (`CUTGRAPH_ADAPTER=runway` with a real
+`CUTGRAPH_RUNWAY_API_KEY`) is manual, a small number of runs, not part of the automated suite.
 
 WebCodecs can't run in jsdom, so mediabunny itself is mocked in `apps/web` unit tests; the
 orchestration logic around it (executors, the run loop, persistence, reconciliation) is what's
