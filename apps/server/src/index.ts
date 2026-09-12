@@ -60,8 +60,8 @@ export function createApp(config: AppConfig = loadConfig()) {
   const isRunway = active === 'runway';
   const jobRunner = new JobRunner(jobStore, adapter, config.jobTimeoutMs);
 
-  // Spend limits only bite for the paid adapter -- fixture mode (the deployed demo, and every
-  // existing test) stays unlimited.
+  // Spend limits only bite for the paid adapter -- fixture mode (and every existing test) stays
+  // unlimited.
   const spendGuard = isRunway
     ? new SpendGuard(config.spendGuard?.maxGenerationsTotal ?? 50, config.spendGuard?.maxConcurrentJobs ?? 3)
     : new SpendGuard(Infinity, Infinity);
