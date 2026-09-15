@@ -1,9 +1,20 @@
-import { graphReducer } from '@cutgraph/shared';
+import { actions, graphReducer } from '@cutgraph/shared';
 import type { Graph, GraphAction } from '@cutgraph/shared';
-import { createContext, useContext, useEffect, useReducer, useRef, type Dispatch, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+} from 'react';
 import { loadGraph, saveGraph } from './persistence';
 import { reconcileInFlightJobs } from './reconciliation';
 import { createSampleGraph } from './sampleGraph';
+import { GraphHistory, graphDocumentFromGraph, isGraphEditAction } from './graphHistory';
 
 interface GraphContextValue {
   graph: Graph;
@@ -15,6 +26,10 @@ interface GraphContextValue {
   // exactly that race.
   dispatch: Dispatch<GraphAction>;
   getGraph: () => Graph;
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => void;
+  redo: () => void;
 }
 
 const GraphContext = createContext<GraphContextValue | undefined>(undefined);
@@ -27,12 +42,58 @@ export function GraphProvider({ children }: { children: ReactNode }) {
   const [graph, reactDispatch] = useReducer(graphReducer, undefined, () => loadGraph() ?? createSampleGraph());
   const graphRef = useRef(graph);
   graphRef.current = graph;
+  const historyRef = useRef(new GraphHistory());
+  const [historyAvailability, setHistoryAvailability] = useState({ canUndo: false, canRedo: false });
+
+  const syncHistoryAvailability = () => {
+    setHistoryAvailability({ canUndo: historyRef.current.canUndo, canRedo: historyRef.current.canRedo });
+  };
 
   const dispatchRef = useRef((action: GraphAction) => {
-    graphRef.current = graphReducer(graphRef.current, action);
+    const before = graphRef.current;
+    const next = graphReducer(before, action);
+    if (isGraphEditAction(action)) {
+      const recorded = historyRef.current.record(
+        graphDocumentFromGraph(before),
+        graphDocumentFromGraph(next),
+        action,
+      );
+      if (recorded) syncHistoryAvailability();
+    }
+    graphRef.current = next;
     reactDispatch(action);
   });
   const getGraphRef = useRef(() => graphRef.current);
+
+  const undo = useCallback(() => {
+    const document = historyRef.current.undo();
+    if (!document) return;
+    const action = actions.graphDocumentRestored(document);
+    graphRef.current = graphReducer(graphRef.current, action);
+    reactDispatch(action);
+    syncHistoryAvailability();
+  }, [reactDispatch]);
+
+  const redo = useCallback(() => {
+    const document = historyRef.current.redo();
+    if (!document) return;
+    const action = actions.graphDocumentRestored(document);
+    graphRef.current = graphReducer(graphRef.current, action);
+    reactDispatch(action);
+    syncHistoryAvailability();
+  }, [reactDispatch]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLowerCase() !== 'z') return;
+      if (isNativeTextEditingTarget(event.target)) return;
+      event.preventDefault();
+      if (event.shiftKey) redo();
+      else undo();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [redo, undo]);
 
   useEffect(() => {
     // Reconciles whatever was hydrated from storage at boot -- deliberately not re-run on
@@ -46,9 +107,30 @@ export function GraphProvider({ children }: { children: ReactNode }) {
   }, [graph]);
 
   return (
-    <GraphContext.Provider value={{ graph, dispatch: dispatchRef.current, getGraph: getGraphRef.current }}>
+    <GraphContext.Provider
+      value={{
+        graph,
+        dispatch: dispatchRef.current,
+        getGraph: getGraphRef.current,
+        canUndo: historyAvailability.canUndo,
+        canRedo: historyAvailability.canRedo,
+        undo,
+        redo,
+      }}
+    >
       {children}
     </GraphContext.Provider>
+  );
+}
+
+function isNativeTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.isContentEditable ||
+    target.closest('[contenteditable="true"]') !== null ||
+    target.tagName === 'INPUT' ||
+    target.tagName === 'TEXTAREA' ||
+    target.tagName === 'SELECT'
   );
 }
 

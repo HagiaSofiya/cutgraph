@@ -1,4 +1,4 @@
-import type { Graph, GraphNode } from '../types';
+import type { Graph, GraphDocument, GraphNode } from '../types';
 import type { GraphAction } from './actions';
 import { propagateStale } from './staleness';
 
@@ -26,6 +26,103 @@ function updateNode(graph: Graph, nodeId: string, patch: Partial<GraphNode>): Gr
 
 function sameHandle(a: string | null | undefined, b: string | null | undefined): boolean {
   return (a ?? null) === (b ?? null);
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, i) => sameValue(value, b[i]));
+  }
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+
+  const aRecord = a as Record<string, unknown>;
+  const bRecord = b as Record<string, unknown>;
+  const aKeys = Object.keys(aRecord);
+  const bKeys = Object.keys(bRecord);
+  return (
+    aKeys.length === bKeys.length &&
+    aKeys.every((key) => Object.hasOwn(bRecord, key) && sameValue(aRecord[key], bRecord[key]))
+  );
+}
+
+function restoreGraphDocument(graph: Graph, document: GraphDocument): Graph {
+  const changedTargets = new Set<string>();
+  const allNodeIds = new Set([...Object.keys(graph.nodes), ...Object.keys(document.nodes)]);
+
+  for (const nodeId of allNodeIds) {
+    const current = graph.nodes[nodeId];
+    const target = document.nodes[nodeId];
+    if (current && !target) {
+      for (const edge of Object.values(graph.edges)) {
+        if (edge.source === nodeId) changedTargets.add(edge.target);
+      }
+    } else if (current && target && (current.type !== target.type || !sameValue(current.params, target.params))) {
+      changedTargets.add(nodeId);
+    }
+  }
+
+  const allEdgeIds = new Set([...Object.keys(graph.edges), ...Object.keys(document.edges)]);
+  for (const edgeId of allEdgeIds) {
+    const current = graph.edges[edgeId];
+    const target = document.edges[edgeId];
+    if (current && !target) changedTargets.add(current.target);
+    else if (target && !current) changedTargets.add(target.target);
+    else if (current && target && !sameValue(current, target)) {
+      changedTargets.add(current.target);
+      changedTargets.add(target.target);
+    }
+  }
+
+  const nodes: Record<string, GraphNode> = {};
+  const changedNodeIds = new Set<string>();
+  for (const [nodeId, target] of Object.entries(document.nodes)) {
+    const current = graph.nodes[nodeId];
+    if (!current) {
+      nodes[nodeId] = {
+        ...target,
+        status: 'idle',
+        updatedAt: Date.now(),
+      };
+      continue;
+    }
+
+    const inputsUnchanged = current.type === target.type && sameValue(current.params, target.params);
+    const positionUnchanged = sameValue(current.position, target.position);
+    if (inputsUnchanged && positionUnchanged) {
+      nodes[nodeId] = current;
+      continue;
+    }
+    if (!inputsUnchanged) changedNodeIds.add(nodeId);
+    nodes[nodeId] = {
+      ...current,
+      ...target,
+      ...(inputsUnchanged ? {} : { jobId: undefined }),
+      updatedAt: Date.now(),
+    };
+  }
+
+  let restored: Graph = {
+    ...graph,
+    nodes,
+    edges: document.edges,
+  };
+  restored = propagateStale(restored, [...changedTargets]);
+
+  // A document restore must never bring back a job id for a node whose inputs or upstream
+  // wiring just changed. Its remote job may still settle, but the reducer will ignore that
+  // terminal event unless the node is still queued/running with the same cache key.
+  const cleanNodes = { ...restored.nodes };
+  for (const nodeId of changedNodeIds) {
+    const node = cleanNodes[nodeId];
+    if (node) cleanNodes[nodeId] = { ...node, jobId: undefined };
+  }
+  for (const nodeId of changedTargets) {
+    const node = cleanNodes[nodeId];
+    if (node?.status === 'stale' && node.jobId !== undefined) {
+      cleanNodes[nodeId] = { ...node, jobId: undefined };
+    }
+  }
+  return { ...restored, nodes: cleanNodes };
 }
 
 // Pure (state, action) -> state. No side effects, no async, no graph-walking beyond the
@@ -65,6 +162,18 @@ export function graphReducer(graph: Graph, action: GraphAction): Graph {
 
     case 'NODE_MOVED': {
       return updateNode(graph, action.nodeId, { position: action.position });
+    }
+
+    case 'NODES_MOVED': {
+      const nodes = { ...graph.nodes };
+      let changed = false;
+      for (const { nodeId, position } of action.positions) {
+        const node = nodes[nodeId];
+        if (!node || (node.position.x === position.x && node.position.y === position.y)) continue;
+        nodes[nodeId] = { ...node, position, updatedAt: Date.now() };
+        changed = true;
+      }
+      return changed ? { ...graph, nodes } : graph;
     }
 
     case 'EDGE_ADDED': {
@@ -157,6 +266,10 @@ export function graphReducer(graph: Graph, action: GraphAction): Graph {
 
     case 'HYDRATE_FROM_STORAGE': {
       return action.graph;
+    }
+
+    case 'GRAPH_DOCUMENT_RESTORED': {
+      return restoreGraphDocument(graph, action.document);
     }
 
     default:

@@ -27,12 +27,16 @@ export function FlowCanvas() {
   const handleNodesChange = useCallback(
     (changes: NodeChange<CutgraphNode>[]) => {
       onNodesChangeInternal(changes);
+      // React Flow reports each selected node's final position separately. Keep one move action
+      // so a drag of a multi-selection is a single undo step.
+      const moved = changes.flatMap((change) =>
+        change.type === 'position' && change.position && change.dragging === false
+          ? [{ nodeId: change.id, position: change.position }]
+          : [],
+      );
+      if (moved.length > 0) dispatch(actions.nodesMoved(moved));
       for (const change of changes) {
-        if (change.type === 'position' && change.position && change.dragging === false) {
-          dispatch(actions.nodeMoved(change.id, change.position));
-        } else if (change.type === 'remove') {
-          dispatch(actions.nodeRemoved(change.id));
-        }
+        if (change.type === 'remove') dispatch(actions.nodeRemoved(change.id));
       }
     },
     [onNodesChangeInternal, dispatch],

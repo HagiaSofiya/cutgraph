@@ -1,9 +1,10 @@
-import type { Graph, GraphEdge, MediaRef, NodeFailure, NodeType } from '../types';
+import type { Graph, GraphDocument, GraphEdge, MediaRef, NodeFailure, NodeType } from '../types';
 
 export type GraphAction =
   | { type: 'NODE_ADDED'; nodeId: string; nodeType: NodeType; position: { x: number; y: number }; params: unknown }
   | { type: 'NODE_REMOVED'; nodeId: string }
   | { type: 'NODE_MOVED'; nodeId: string; position: { x: number; y: number } }
+  | { type: 'NODES_MOVED'; positions: Array<{ nodeId: string; position: { x: number; y: number } }> }
   | { type: 'EDGE_ADDED'; edge: GraphEdge }
   | { type: 'EDGE_REMOVED'; edgeId: string }
   | { type: 'PARAM_CHANGED'; nodeId: string; params: unknown }
@@ -12,7 +13,8 @@ export type GraphAction =
   | { type: 'NODE_SUCCEEDED'; nodeId: string; cacheKey: string; result: MediaRef }
   | { type: 'NODE_FAILED'; nodeId: string; cacheKey: string; error: NodeFailure }
   | { type: 'NODE_RETRY'; nodeId: string }
-  | { type: 'HYDRATE_FROM_STORAGE'; graph: Graph };
+  | { type: 'HYDRATE_FROM_STORAGE'; graph: Graph }
+  | { type: 'GRAPH_DOCUMENT_RESTORED'; document: GraphDocument };
 
 export const actions = {
   nodeAdded: (
@@ -28,6 +30,11 @@ export const actions = {
     type: 'NODE_MOVED',
     nodeId,
     position,
+  }),
+
+  nodesMoved: (positions: Array<{ nodeId: string; position: { x: number; y: number } }>): GraphAction => ({
+    type: 'NODES_MOVED',
+    positions,
   }),
 
   edgeAdded: (edge: GraphEdge): GraphAction => ({ type: 'EDGE_ADDED', edge }),
@@ -70,4 +77,9 @@ export const actions = {
   nodeRetry: (nodeId: string): GraphAction => ({ type: 'NODE_RETRY', nodeId }),
 
   hydrateFromStorage: (graph: Graph): GraphAction => ({ type: 'HYDRATE_FROM_STORAGE', graph }),
+
+  graphDocumentRestored: (document: GraphDocument): GraphAction => ({
+    type: 'GRAPH_DOCUMENT_RESTORED',
+    document,
+  }),
 };

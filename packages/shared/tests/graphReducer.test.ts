@@ -35,6 +35,24 @@ describe('graphReducer: structural actions', () => {
     expect(statusOf(next, 'a')).toBe('succeeded');
   });
 
+  it('NODES_MOVED updates a multi-selection in one graph edit without invalidating results', () => {
+    const graph = makeGraph([
+      makeNode({ id: 'a', status: 'succeeded', result: makeResult('a') }),
+      makeNode({ id: 'b', status: 'succeeded', result: makeResult('b') }),
+    ]);
+    const next = graphReducer(
+      graph,
+      actions.nodesMoved([
+        { nodeId: 'a', position: { x: 10, y: 20 } },
+        { nodeId: 'b', position: { x: 30, y: 40 } },
+      ]),
+    );
+    expect(next.nodes.a.position).toEqual({ x: 10, y: 20 });
+    expect(next.nodes.b.position).toEqual({ x: 30, y: 40 });
+    expect(statusOf(next, 'a')).toBe('succeeded');
+    expect(statusOf(next, 'b')).toBe('succeeded');
+  });
+
   it('EDGE_ADDED rejects an edge whose target handle is already taken', () => {
     const graph = makeGraph(
       [makeNode({ id: 'a' }), makeNode({ id: 'b' }), makeNode({ id: 'concat', type: 'concat' })],
@@ -271,5 +289,77 @@ describe('graphReducer: HYDRATE_FROM_STORAGE', () => {
     graph = graphReducer(graph, actions.nodeFailed('a', 'k1', { message: 'local failure' }));
 
     expect(graph.nodes.a.error?.code).toBeUndefined();
+  });
+});
+
+describe('graphReducer: GRAPH_DOCUMENT_RESTORED', () => {
+  it('restores params, marks affected nodes stale, preserves the result cache, and rejects a late job result', () => {
+    const graph = makeGraph(
+      [
+        makeNode({ id: 'a', params: { prompt: 'new' }, status: 'running', cacheKey: 'in-flight', jobId: 'job-1', result: makeResult('old-a') }),
+        makeNode({ id: 'b', status: 'succeeded', result: makeResult('b'), cacheKey: 'b-key' }),
+      ],
+      [makeEdge({ id: 'ab', source: 'a', target: 'b' })],
+    );
+    graph.resultCache['cached'] = makeResult('cached');
+    const document = {
+      nodes: {
+        a: { id: 'a', type: 'trim' as const, position: { x: 0, y: 0 }, params: { prompt: 'old' } },
+        b: { id: 'b', type: 'trim' as const, position: { x: 0, y: 0 }, params: {} },
+      },
+      edges: { ab: makeEdge({ id: 'ab', source: 'a', target: 'b' }) },
+    };
+
+    const restored = graphReducer(graph, actions.graphDocumentRestored(document));
+    expect(restored.nodes.a.params).toEqual({ prompt: 'old' });
+    expect(statusOf(restored, 'a')).toBe('stale');
+    expect(restored.nodes.a.jobId).toBeUndefined();
+    expect(restored.nodes.a.result).toEqual(makeResult('old-a'));
+    expect(statusOf(restored, 'b')).toBe('stale');
+    expect(restored.resultCache).toEqual(graph.resultCache);
+
+    const late = graphReducer(restored, actions.nodeSucceeded('a', 'in-flight', makeResult('late')));
+    expect(statusOf(late, 'a')).toBe('stale');
+    expect(late.nodes.a.result).toEqual(makeResult('old-a'));
+    expect(late.resultCache['in-flight']).toEqual(makeResult('late'));
+  });
+
+  it('restores a removed node as idle with its edge while preserving and staling downstream results', () => {
+    const graph = makeGraph(
+      [
+        makeNode({ id: 'b', status: 'succeeded', result: makeResult('b') }),
+      ],
+    );
+    graph.resultCache['a-cache'] = makeResult('a-cache');
+    const document = {
+      nodes: {
+        a: { id: 'a', type: 'trim' as const, position: { x: 2, y: 3 }, params: { start: 0, end: 1 } },
+        b: { id: 'b', type: 'trim' as const, position: { x: 0, y: 0 }, params: {} },
+      },
+      edges: { ab: makeEdge({ id: 'ab', source: 'a', target: 'b' }) },
+    };
+
+    const restored = graphReducer(graph, actions.graphDocumentRestored(document));
+    expect(restored.nodes.a).toMatchObject({ status: 'idle', params: { start: 0, end: 1 } });
+    expect(restored.nodes.a.jobId).toBeUndefined();
+    expect(restored.edges.ab).toBeDefined();
+    expect(statusOf(restored, 'b')).toBe('stale');
+    expect(restored.nodes.b.result).toEqual(makeResult('b'));
+    expect(restored.resultCache).toEqual(graph.resultCache);
+  });
+
+  it('restores positions without invalidating results or runtime status', () => {
+    const graph = makeGraph([
+      makeNode({ id: 'a', status: 'succeeded', result: makeResult('a'), position: { x: 40, y: 50 } }),
+    ]);
+    const document = {
+      nodes: { a: { id: 'a', type: 'trim' as const, position: { x: 0, y: 0 }, params: {} } },
+      edges: {},
+    };
+
+    const restored = graphReducer(graph, actions.graphDocumentRestored(document));
+    expect(restored.nodes.a.position).toEqual({ x: 0, y: 0 });
+    expect(statusOf(restored, 'a')).toBe('succeeded');
+    expect(restored.nodes.a.result).toEqual(makeResult('a'));
   });
 });

@@ -27,7 +27,7 @@ const LABELS: Record<NodeType, string> = {
 let addCount = 0;
 
 export function Toolbar() {
-  const { dispatch, getGraph } = useGraph();
+  const { dispatch, getGraph, canUndo, canRedo, undo, redo } = useGraph();
   const { fitView } = useReactFlow();
 
   const addNode = (type: NodeType) => {
@@ -43,7 +43,13 @@ export function Toolbar() {
     const hasWork = Object.keys(getGraph().nodes).length > 0;
     if (hasWork && !window.confirm('Replace the current graph with the sample pipeline?')) return;
 
-    dispatch(actions.hydrateFromStorage(createSampleGraph()));
+    const sample = createSampleGraph();
+    dispatch(
+      actions.hydrateFromStorage({
+        ...sample,
+        resultCache: { ...getGraph().resultCache, ...sample.resultCache },
+      }),
+    );
     // The new graph only reaches xyflow's store via useSyncNodeData's effect, so a synchronous
     // fitView() here would fit the nodes we just replaced.
     requestAnimationFrame(() => void fitView());
@@ -60,6 +66,24 @@ export function Toolbar() {
       }}
     >
       <AdapterBadge />
+      <button
+        type="button"
+        onClick={undo}
+        disabled={!canUndo}
+        aria-label="Undo"
+        title="Undo (⌘Z / Ctrl+Z)"
+      >
+        Undo
+      </button>
+      <button
+        type="button"
+        onClick={redo}
+        disabled={!canRedo}
+        aria-label="Redo"
+        title="Redo (⌘⇧Z / Ctrl+Shift+Z)"
+      >
+        Redo
+      </button>
       {(Object.keys(LABELS) as NodeType[]).map((type) => (
         <button key={type} type="button" onClick={() => addNode(type)}>
           + {LABELS[type]}

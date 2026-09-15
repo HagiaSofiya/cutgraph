@@ -69,6 +69,20 @@ export interface GraphEdge {
   targetHandle?: string | null;
 }
 
+export interface GraphDocumentNode {
+  id: string;
+  type: NodeType;
+  position: { x: number; y: number };
+  params: unknown;
+}
+
+// The editable part of a graph. Runtime state and generated results deliberately stay out of
+// history so undo/redo cannot rewind jobs or reattach an old in-flight status.
+export interface GraphDocument {
+  nodes: Record<string, GraphDocumentNode>;
+  edges: Record<string, GraphEdge>;
+}
+
 export interface Graph {
   nodes: Record<string, GraphNode>;
   edges: Record<string, GraphEdge>;
