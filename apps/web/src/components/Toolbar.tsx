@@ -1,9 +1,17 @@
 import { actions, DEFAULT_IMAGE_TO_VIDEO_MODEL, DEFAULT_TEXT_TO_IMAGE_MODEL } from '@cutgraph/shared';
 import type { NodeType } from '@cutgraph/shared';
 import { useReactFlow } from '@xyflow/react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useSelectedNodeIds } from '../canvas/useSelectedNodeIds';
+import { triggerDownload } from '../media/mediabunnyClient';
 import { useGraph } from '../state/graphContext';
+import {
+  GRAPH_FILE_NAME,
+  graphFromDocument,
+  imageInputCount,
+  parseGraphFile,
+  serializeGraphFile,
+} from '../state/graphFile';
 import { createSampleGraph } from '../state/sampleGraph';
 import { RunButton, runTargetsForScope } from './RunButton';
 import type { RunScope } from './RunButton';
@@ -38,6 +46,7 @@ export function Toolbar() {
   const { fitView } = useReactFlow();
   const selectedNodeIds = useSelectedNodeIds();
   const [scope, setScope] = useState<RunScope>('graph');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Derived rather than reset through an effect: with nothing selected the scoped options mean
   // nothing, so Run falls back to the whole graph instead of silently targeting an empty set.
@@ -71,6 +80,33 @@ export function Toolbar() {
     );
     // The new graph only reaches xyflow's store via useSyncNodeData's effect, so a synchronous
     // fitView() here would fit the nodes we just replaced.
+    requestAnimationFrame(() => void fitView());
+  };
+
+  const saveGraph = () => {
+    triggerDownload(new Blob([serializeGraphFile(getGraph())], { type: 'application/json' }), GRAPH_FILE_NAME);
+  };
+
+  const openGraph = async (file: File) => {
+    const parsed = parseGraphFile(await file.text());
+    if (!parsed.ok) {
+      window.alert(`Could not open ${file.name}.\n\n${parsed.error}`);
+      return;
+    }
+
+    // Same wholesale replace as Load sample, and asked for on the same terms. Going through
+    // HYDRATE_FROM_STORAGE rather than GRAPH_DOCUMENT_RESTORED is deliberate: only the former
+    // is recorded in history, and replacing the whole canvas is exactly the edit a user is
+    // most likely to want back.
+    const uploads = imageInputCount(parsed.document);
+    const warning = uploads > 0
+      ? `\n\n${uploads} Image Input node${uploads === 1 ? '' : 's'} will need its file picked again -- ` +
+        'uploads are not part of a saved graph.'
+      : '';
+    const hasWork = Object.keys(getGraph().nodes).length > 0;
+    if (hasWork && !window.confirm(`Replace the current graph with ${file.name}?${warning}`)) return;
+
+    dispatch(actions.hydrateFromStorage(graphFromDocument(parsed.document, getGraph().resultCache)));
     requestAnimationFrame(() => void fitView());
   };
 
@@ -112,6 +148,29 @@ export function Toolbar() {
         <button type="button" onClick={loadSample}>
           Load sample
         </button>
+        <button type="button" onClick={saveGraph} title="Download this pipeline as a JSON file.">
+          Save graph
+        </button>
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          title="Open a pipeline saved with Save graph."
+        >
+          Open graph
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          aria-label="Open graph file"
+          style={{ display: 'none' }}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            // Cleared so picking the same file twice in a row still fires a change event.
+            event.target.value = '';
+            if (file) void openGraph(file);
+          }}
+        />
         {selectedNodeIds.length > 0 && (
           <select
             value={effectiveScope}

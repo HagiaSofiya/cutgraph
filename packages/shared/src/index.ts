@@ -3,6 +3,7 @@ export * from './types';
 export * from './schemas/common';
 export * from './schemas/nodeParams';
 export * from './schemas/graph';
+export * from './schemas/graphDocument';
 export * from './schemas/health';
 export * from './schemas/job';
 export * from './schemas/sse';
