@@ -11,6 +11,7 @@ import {
   type Dispatch,
   type ReactNode,
 } from 'react';
+import { isNativeTextEditingTarget } from './isNativeTextEditingTarget';
 import { loadGraph, saveGraph } from './persistence';
 import { reconcileInFlightJobs } from './reconciliation';
 import { createSampleGraph } from './sampleGraph';
@@ -120,17 +121,6 @@ export function GraphProvider({ children }: { children: ReactNode }) {
     >
       {children}
     </GraphContext.Provider>
-  );
-}
-
-function isNativeTextEditingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return (
-    target.isContentEditable ||
-    target.closest('[contenteditable="true"]') !== null ||
-    target.tagName === 'INPUT' ||
-    target.tagName === 'TEXTAREA' ||
-    target.tagName === 'SELECT'
   );
 }
 
