@@ -1,10 +1,28 @@
-import { CycleError, selectRunPlan } from '@cutgraph/shared';
-import type { HealthResponse, RunPlan } from '@cutgraph/shared';
+import { CycleError, downstreamOf, selectRunPlan } from '@cutgraph/shared';
+import type { Graph, HealthResponse, RunPlan } from '@cutgraph/shared';
 import { useMemo, useRef, useState } from 'react';
 import { getHealth } from '../api/client';
 import { executorsByNodeType } from '../orchestrator/executors';
 import { runGraph, terminalNodeIds } from '../orchestrator/runGraph';
 import { useGraph } from '../state/graphContext';
+
+// 'graph' targets every terminal node. The other two exist because a generation costs money:
+// re-running one branch should not mean paying for the others. runGraph has always accepted an
+// arbitrary target list -- only a way to pick one was missing.
+export type RunScope = 'graph' | 'selection' | 'downstream';
+
+// Undefined means "the whole graph", which RunButton resolves to its terminal nodes. Whatever
+// comes back, topoSort expands it with every ancestor, so a scope only ever narrows what runs
+// *after* the selection, never what it depends on.
+export function runTargetsForScope(
+  graph: Graph,
+  scope: RunScope,
+  selectedNodeIds: string[],
+): string[] | undefined {
+  if (scope === 'graph' || selectedNodeIds.length === 0) return undefined;
+  if (scope === 'selection') return selectedNodeIds;
+  return [...new Set(selectedNodeIds.flatMap((id) => [id, ...downstreamOf(graph, id)]))].sort();
+}
 
 // The four numbers that change what a user would do next: work that costs money, work that does
 // not, work already paid for, and work that cannot start at all.
@@ -47,16 +65,11 @@ export function spendConfirmation(plan: RunPlan, health: HealthResponse | undefi
 }
 
 interface RunButtonProps {
-  // Which nodes to run towards. Defaults to every terminal node -- the whole graph.
+  // Which nodes to run towards. Undefined means every terminal node -- the whole graph.
   targetNodeIds?: string[];
-  label?: string;
-  title?: string;
-  // Hidden rather than disabled when there is nothing to run, so a selection-scoped Run does not
-  // sit in the toolbar as permanent dead weight.
-  hideWhenEmpty?: boolean;
 }
 
-export function RunButton({ targetNodeIds, label = 'Run', title, hideWhenEmpty = false }: RunButtonProps) {
+export function RunButton({ targetNodeIds }: RunButtonProps) {
   const { graph, dispatch, getGraph } = useGraph();
   const [isRunning, setIsRunning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -103,8 +116,6 @@ export function RunButton({ targetNodeIds, label = 'Run', title, hideWhenEmpty =
     }
   };
 
-  if (hideWhenEmpty && !willDoWork && !isRunning) return null;
-
   const disabledTitle =
     plan === undefined
       ? 'This graph has a cycle, so there is no order to run it in.'
@@ -112,18 +123,16 @@ export function RunButton({ targetNodeIds, label = 'Run', title, hideWhenEmpty =
 
   return (
     <>
-      {targetNodeIds === undefined && (
-        <span style={{ fontSize: 11, opacity: 0.7, whiteSpace: 'nowrap' }}>
-          {plan === undefined ? 'cycle' : summarizePlan(plan)}
-        </span>
-      )}
+      <span style={{ fontSize: 11, opacity: 0.7, whiteSpace: 'nowrap' }}>
+        {plan === undefined ? 'cycle' : summarizePlan(plan)}
+      </span>
       <button
         onClick={() => void handleRun()}
         disabled={isRunning || !willDoWork}
-        title={willDoWork ? title : disabledTitle}
+        title={willDoWork ? undefined : disabledTitle}
         type="button"
       >
-        {isRunning ? 'Running…' : label}
+        {isRunning ? 'Running…' : 'Run'}
       </button>
       {isRunning && (
         <button onClick={() => abortRef.current?.abort()} type="button">

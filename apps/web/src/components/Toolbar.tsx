@@ -1,9 +1,12 @@
 import { actions, DEFAULT_IMAGE_TO_VIDEO_MODEL, DEFAULT_TEXT_TO_IMAGE_MODEL } from '@cutgraph/shared';
 import type { NodeType } from '@cutgraph/shared';
 import { useReactFlow } from '@xyflow/react';
+import { useMemo, useState } from 'react';
+import { useSelectedNodeIds } from '../canvas/useSelectedNodeIds';
 import { useGraph } from '../state/graphContext';
 import { createSampleGraph } from '../state/sampleGraph';
-import { RunButton } from './RunButton';
+import { RunButton, runTargetsForScope } from './RunButton';
+import type { RunScope } from './RunButton';
 import { AdapterBadge } from './AdapterBadge';
 
 const DEFAULT_PARAMS: Record<NodeType, Record<string, unknown>> = {
@@ -26,9 +29,25 @@ const LABELS: Record<NodeType, string> = {
 
 let addCount = 0;
 
+const SCOPE_TITLE =
+  'What Run targets. Whichever you pick, everything those nodes depend on is included; ' +
+  'anything already up to date is skipped.';
+
 export function Toolbar() {
-  const { dispatch, getGraph, canUndo, canRedo, undo, redo } = useGraph();
+  const { graph, dispatch, getGraph, canUndo, canRedo, undo, redo } = useGraph();
   const { fitView } = useReactFlow();
+  const selectedNodeIds = useSelectedNodeIds();
+  const [scope, setScope] = useState<RunScope>('graph');
+
+  // Derived rather than reset through an effect: with nothing selected the scoped options mean
+  // nothing, so Run falls back to the whole graph instead of silently targeting an empty set.
+  // The stored choice survives, so clearing and re-selecting keeps the user's preference.
+  const effectiveScope = selectedNodeIds.length === 0 ? 'graph' : scope;
+
+  const runTargets = useMemo(
+    () => runTargetsForScope(graph, effectiveScope, selectedNodeIds),
+    [graph, effectiveScope, selectedNodeIds],
+  );
 
   const addNode = (type: NodeType) => {
     addCount += 1;
@@ -93,7 +112,19 @@ export function Toolbar() {
         <button type="button" onClick={loadSample}>
           Load sample
         </button>
-        <RunButton />
+        {selectedNodeIds.length > 0 && (
+          <select
+            value={effectiveScope}
+            onChange={(event) => setScope(event.target.value as RunScope)}
+            aria-label="Run scope"
+            title={SCOPE_TITLE}
+          >
+            <option value="graph">Whole graph</option>
+            <option value="selection">Selection ({selectedNodeIds.length})</option>
+            <option value="downstream">Selection + downstream</option>
+          </select>
+        )}
+        <RunButton targetNodeIds={runTargets} />
       </div>
     </div>
   );
