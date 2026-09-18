@@ -1,4 +1,12 @@
-import { actions, deriveCacheKey, FailureCodeEnum, incomingEdges, outgoingEdges, topoSort } from '@cutgraph/shared';
+import {
+  actions,
+  classifyRunNode,
+  FailureCodeEnum,
+  GENERATION_NODE_TYPES,
+  incomingEdges,
+  outgoingEdges,
+  topoSort,
+} from '@cutgraph/shared';
 import type { Graph, GraphAction, MediaRef, NodeFailure, NodeType } from '@cutgraph/shared';
 import type { Dispatch } from 'react';
 import type { Executor } from './executors/types';
@@ -14,8 +22,9 @@ const DEFAULT_MAX_CONCURRENCY = 3;
 // ids), so two nodes sharing a key are interchangeable and one run can serve both -- see the
 // join in executeNode. Deliberately not every type: an ImageInput's real input is the file held
 // in blobStore under its own node id, which no cache key describes, so two of those must stay
-// independent even when their params match.
-const DEDUPED_BY_CACHE_KEY: ReadonlySet<NodeType> = new Set<NodeType>(['textToImage', 'imageToVideo']);
+// independent even when their params match. Shared with the run plan, which has to count a
+// joined pair as one generation to be honest about what a run costs.
+const DEDUPED_BY_CACHE_KEY = GENERATION_NODE_TYPES;
 
 export interface RunGraphDeps {
   getGraph: () => Graph;
@@ -114,19 +123,17 @@ async function executeNode(
   const graph = deps.getGraph();
   const node = graph.nodes[nodeId];
   if (!node) return;
-  if (node.status !== 'idle' && node.status !== 'stale' && node.status !== 'failed') return;
 
+  // Both early exits (already-settled node, unresolved upstream) and the cache-key derivation
+  // live in classifyRunNode, so the pre-run plan the Run button shows is computed by the very
+  // same rules that decide this -- see selectRunPlan.
   const resolved = resolveUpstream(graph, nodeId);
-  if (!resolved) return; // blocked by an unresolved (or failed) upstream
-
-  const cacheKey = deriveCacheKey({
-    nodeType: node.type,
-    params: node.params as Record<string, unknown>,
-    upstream: resolved.cacheKeyEntries,
-  });
+  const { disposition, cacheKey } = classifyRunNode(graph, nodeId, resolved?.cacheKeyEntries);
+  if (!resolved || cacheKey === undefined) return;
+  if (disposition === 'settled' || disposition === 'blocked') return;
 
   const cached = graph.resultCache[cacheKey];
-  if (cached) {
+  if (disposition === 'cached' && cached) {
     // Instant hit -- e.g. an edit-and-revert. Still walked through queued/running so
     // the reducer's precondition chain accepts the terminal transition.
     deps.dispatch(actions.nodeQueued(nodeId, cacheKey));

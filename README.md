@@ -56,6 +56,42 @@ nodes from the toolbar and connecting them; **Load sample** puts the demo pipeli
 `blob:` URLs that live only in the tab that created them and are re-run after a reload. See
 [Architecture decisions](#architecture-decisions) below.
 
+## Editing
+
+| Action | How |
+|---|---|
+| Undo / redo | Cmd+Z / Cmd+Shift+Z (Ctrl elsewhere), or the toolbar buttons |
+| Copy / paste | Cmd+C / Cmd+V -- successive pastes cascade instead of stacking |
+| Duplicate | Cmd+D, which copies and pastes without disturbing the clipboard |
+| Delete | Backspace or Delete on a selection |
+| Save / open a graph | Toolbar buttons, reading and writing a JSON file |
+
+Shortcuts are ignored while a text field has focus, so a node's prompt keeps its own native
+undo and copy. A multi-node paste, drag or delete is a single undo step. A copy keeps only the
+edges running *between* the copied nodes: an edge with one end outside the selection is
+dropped, because a copy rewired back into the original's upstream would silently share its
+inputs -- and on a generation node that would quietly make the copy a free cache hit of the
+very thing you meant to vary.
+
+The clipboard lives as long as the tab. A pipeline that has to cross a tab boundary goes
+through **Save graph**, which carries the pipeline but not its output -- results are either
+`blob:` URLs that mean nothing elsewhere or server URLs tied to one server. Image Input nodes
+come back needing their file picked again, which the import says out loud rather than leaving
+it to surface as a failed node: the bytes live in this tab's `blobStore` under the node id and
+no document carries them.
+
+## Running a graph
+
+Run says what it is about to do before it does it -- `3 to generate · 2 local · 1 cached` --
+and asks first when that includes real generations, quoting the count, the free cache hits and
+how much of the server's budget is left. Going over budget is reported up front rather than
+arriving as a node-by-node string of 429s.
+
+Selecting nodes adds a scope picker: the whole graph, just the selection, or the selection and
+everything downstream of it. Whichever you pick, everything those nodes depend on is included
+and anything already up to date is skipped -- so re-running one branch does not mean paying
+for the others.
+
 ## Architecture
 
 An npm workspaces monorepo, so the reducer and schemas are a single source of truth shared by
@@ -65,7 +101,8 @@ both apps:
 packages/shared/     framework-agnostic core: no React, no server deps
   src/schemas/          Zod schemas for node params, the graph, jobs, SSE events
   src/types/            Graph, GraphNode, GraphEdge, MediaRef
-  src/reducer/          the graph state machine (pure), staleness propagation, selectors
+  src/reducer/          the graph state machine (pure), staleness propagation, selectors,
+                        run planning
   src/cache/            stable hashing + cache-key derivation
 
 apps/server/          Hono backend, orchestrates generation jobs only
@@ -76,7 +113,8 @@ apps/server/          Hono backend, orchestrates generation jobs only
   fixtures/              generated media (gitignored; see `npm run generate-fixtures`)
 
 apps/web/             Vite + React + @xyflow/react canvas
-  src/state/             graphContext (the reducer wired to React), persistence, reconciliation
+  src/state/             graphContext (the reducer wired to React), persistence, reconciliation,
+                         undo/redo history, clipboard, graph files
   src/orchestrator/      runGraph (the run loop) + one executor per node type
   src/canvas/            xyflow wiring, memoized data-sync bridge
   src/nodes/             one component per node type, shared NodeShell + MediaPreview
@@ -98,6 +136,24 @@ are plain, framework-agnostic TypeScript, independently unit-tested without touc
   still derives byte-identical keys. Editing one node recomputes it and everything downstream;
   unrelated nodes keep their keys and never re-run, and edit-and-revert is an instant cache hit
   since the old key is still in `Graph.resultCache`.
+- **A run says what it will do before it does it.** `packages/shared/src/reducer/runPlan.ts`
+  walks the topological order and predicts each node's cache key one step ahead, feeding a
+  node's predicted key forward as its predicted output id. That is sound because `MediaRef.id`
+  *is* the cache key that produced it, and it is what lets the plan see past an upstream that
+  has not run yet -- a `resolveUpstream`-style check would call every such node blocked. Both
+  the plan and `runGraph` classify a node through the same `classifyRunNode`, which is the
+  point: a preview that re-implemented those rules would drift from the run it describes and
+  start quietly lying about cost. Generations are counted by distinct cache key rather than by
+  node, matching the in-flight join that turns two identical generation nodes into one adapter
+  call. Before this, Run went straight from click to execution and the first signal of a run's
+  scope was nodes changing color -- while *Load sample*, which spends nothing, had asked for
+  confirmation all along.
+- **A run can be scoped.** `runGraph` has always accepted an arbitrary target list and
+  `topoSort` has always expanded it with the targets' ancestors; what was missing was any way
+  to pick one, so Run stayed hard-wired to every terminal node. Selection was equally
+  stranded -- xyflow owned it, node components read only their own `selected` prop, and nothing
+  lifted it out -- so `canvas/useSelectedNodeIds.ts` surfaces it for the toolbar, holding the
+  array's identity steady while a selection drag fires so the run plan's memo survives it.
 - **Parallel branches.** `apps/web/src/orchestrator/runGraph.ts` gives every node in the run its
   own promise and starts it as soon as its *own* upstreams have settled, rather than walking the
   topological order one node at a time -- so the sample pipeline's two Image to Video legs
@@ -166,6 +222,16 @@ are plain, framework-agnostic TypeScript, independently unit-tested without touc
   coerces the node to `stale`. Generation results and uploads are real server URLs and persist
   as-is. This is a real, visible behavior difference between node types, not a bug: it falls
   directly out of "no database, no file storage beyond fixtures and uploads."
+- **A graph file is validated on the way in.** `packages/shared/src/schemas/graphDocument.ts`
+  narrows each node's params by its node type, which `GraphSchema` cannot -- it leaves `params`
+  as an unvalidated record, survivable for localStorage we wrote ourselves and not for a file
+  that arrived from somewhere else. It also rejects an edge pointing at a node the file does
+  not contain: the reducer guards that on `EDGE_ADDED` but not on a wholesale replace, so such
+  an edge would land as a node stuck blocked forever with nothing on the canvas to explain why.
+  Import goes through `HYDRATE_FROM_STORAGE` rather than `GRAPH_DOCUMENT_RESTORED` so it is
+  recorded in history and can be undone, and carries the current `resultCache` across -- keys
+  derive from type, params and upstream output ids alone, so opening a pipeline this browser
+  has already run resolves from cache instead of being paid for twice.
 - **Concat**, mediabunny's own docs point out, has no single "concatenate N clips" call: the
   high-level `Conversion` API always creates its own track per input, which merges *simultaneous*
   tracks (e.g. video from one file + audio from another), not sequential playback. The
@@ -258,7 +324,7 @@ happened.
 ## Testing
 
 ```bash
-npm test          # 194 tests across all three packages
+npm test          # 249 tests across all three packages
 npm run typecheck
 ```
 
@@ -290,8 +356,9 @@ manually in a real browser end to end.
 
 ## Explicitly out of scope
 
-Auth, a database, multi-user, undo/redo, a settings page, any node type beyond the six above.
-Persistence is localStorage only.
+Auth, a database, multi-user, a settings page, any node type beyond the six above. Persistence
+is localStorage plus an explicit Save/Open graph file -- there is no server-side project store,
+and no graph outlives the browser that saved it unless you save the file yourself.
 
 Deployment, too: there is no hosted demo and no deploy config. The server runs under `tsx`
 against raw TypeScript sources and consumes `@cutgraph/shared` as source rather than a build, so

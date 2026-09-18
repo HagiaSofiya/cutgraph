@@ -3,6 +3,7 @@ export * from './types';
 export * from './schemas/common';
 export * from './schemas/nodeParams';
 export * from './schemas/graph';
+export * from './schemas/graphDocument';
 export * from './schemas/health';
 export * from './schemas/job';
 export * from './schemas/sse';
@@ -19,6 +20,13 @@ export {
   topoSort,
   CycleError,
 } from './reducer/selectors';
+export { classifyRunNode, selectRunPlan, GENERATION_NODE_TYPES } from './reducer/runPlan';
+export type {
+  RunDisposition,
+  RunNodeClassification,
+  RunPlan,
+  RunPlanEntry,
+} from './reducer/runPlan';
 
 export { stableStringify, fnv1a32 } from './cache/hash';
 export { deriveCacheKey } from './cache/cacheKey';

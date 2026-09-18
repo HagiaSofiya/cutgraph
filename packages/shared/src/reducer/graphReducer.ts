@@ -176,6 +176,33 @@ export function graphReducer(graph: Graph, action: GraphAction): Graph {
       return changed ? { ...graph, nodes } : graph;
     }
 
+    case 'NODES_PASTED': {
+      // Ids are minted by the caller and must be fresh; one already taken is skipped, matching
+      // NODE_ADDED's own no-op. Pasted nodes start idle -- a copy has produced nothing yet, and
+      // its cache key is derived on the next run like any other new node's.
+      const nodes = { ...graph.nodes };
+      for (const pasted of action.nodes) {
+        if (nodes[pasted.id]) continue;
+        nodes[pasted.id] = { ...pasted, status: 'idle', updatedAt: Date.now() };
+      }
+
+      const edges = { ...graph.edges };
+      for (const edge of action.edges) {
+        if (edges[edge.id] || !nodes[edge.source] || !nodes[edge.target]) continue;
+        const handleTaken = Object.values(edges).some(
+          (existing) =>
+            existing.target === edge.target && sameHandle(existing.targetHandle, edge.targetHandle),
+        );
+        if (handleTaken) continue;
+        edges[edge.id] = edge;
+      }
+
+      // A copy only carries edges between the nodes it copied, so in practice every target here
+      // is a freshly idle node with nothing to invalidate. Propagating anyway keeps the case
+      // honest if it is ever handed an edge reaching into the existing graph.
+      return propagateStale({ ...graph, nodes, edges }, action.edges.map((edge) => edge.target));
+    }
+
     case 'EDGE_ADDED': {
       const { edge } = action;
       if (!graph.nodes[edge.source] || !graph.nodes[edge.target]) return graph;

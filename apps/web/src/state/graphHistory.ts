@@ -68,6 +68,7 @@ export function isGraphEditAction(action: GraphAction): boolean {
     case 'NODE_REMOVED':
     case 'NODE_MOVED':
     case 'NODES_MOVED':
+    case 'NODES_PASTED':
     case 'EDGE_ADDED':
     case 'EDGE_REMOVED':
     case 'PARAM_CHANGED':

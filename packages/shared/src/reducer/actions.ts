@@ -1,4 +1,12 @@
-import type { Graph, GraphDocument, GraphEdge, MediaRef, NodeFailure, NodeType } from '../types';
+import type {
+  Graph,
+  GraphDocument,
+  GraphDocumentNode,
+  GraphEdge,
+  MediaRef,
+  NodeFailure,
+  NodeType,
+} from '../types';
 
 export type GraphAction =
   | { type: 'NODE_ADDED'; nodeId: string; nodeType: NodeType; position: { x: number; y: number }; params: unknown }
@@ -8,6 +16,7 @@ export type GraphAction =
   | { type: 'EDGE_ADDED'; edge: GraphEdge }
   | { type: 'EDGE_REMOVED'; edgeId: string }
   | { type: 'PARAM_CHANGED'; nodeId: string; params: unknown }
+  | { type: 'NODES_PASTED'; nodes: GraphDocumentNode[]; edges: GraphEdge[] }
   | { type: 'NODE_QUEUED'; nodeId: string; cacheKey: string }
   | { type: 'NODE_RUNNING'; nodeId: string; cacheKey: string; jobId?: string }
   | { type: 'NODE_SUCCEEDED'; nodeId: string; cacheKey: string; result: MediaRef }
@@ -40,6 +49,14 @@ export const actions = {
   edgeAdded: (edge: GraphEdge): GraphAction => ({ type: 'EDGE_ADDED', edge }),
 
   edgeRemoved: (edgeId: string): GraphAction => ({ type: 'EDGE_REMOVED', edgeId }),
+
+  // Nodes and the edges between them in one action, so a paste of several nodes is a single
+  // undo step -- the same reason NODES_MOVED exists alongside NODE_MOVED.
+  nodesPasted: (nodes: GraphDocumentNode[], edges: GraphEdge[]): GraphAction => ({
+    type: 'NODES_PASTED',
+    nodes,
+    edges,
+  }),
 
   paramChanged: (nodeId: string, params: unknown): GraphAction => ({
     type: 'PARAM_CHANGED',

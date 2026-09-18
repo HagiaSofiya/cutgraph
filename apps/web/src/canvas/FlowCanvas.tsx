@@ -13,7 +13,9 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useCallback } from 'react';
 import { useGraph } from '../state/graphContext';
+import { makeEdgeId } from './edgeId';
 import { nodeTypes } from './nodeTypes';
+import { useGraphClipboard } from './useGraphClipboard';
 import type { CutgraphNode } from './types';
 import { useSyncNodeData } from './useSyncNodeData';
 
@@ -23,6 +25,7 @@ export function FlowCanvas() {
   const [edges, setEdges, onEdgesChangeInternal] = useEdgesState<Edge>([]);
 
   useSyncNodeData(graph);
+  useGraphClipboard();
 
   const handleNodesChange = useCallback(
     (changes: NodeChange<CutgraphNode>[]) => {
@@ -55,7 +58,7 @@ export function FlowCanvas() {
   const handleConnect = useCallback(
     (connection: Connection) => {
       if (!connection.source || !connection.target) return;
-      const id = `${connection.source}:${connection.sourceHandle ?? 'out'}->${connection.target}:${connection.targetHandle ?? 'in'}`;
+      const id = makeEdgeId(connection.source, connection.sourceHandle, connection.target, connection.targetHandle);
       dispatch(
         actions.edgeAdded({
           id,
