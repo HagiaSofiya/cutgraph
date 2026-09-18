@@ -114,7 +114,10 @@ export function Toolbar() {
     <div
       style={{
         display: 'flex',
-        gap: 8,
+        // Wraps rather than pushing Run off the right edge: this row now carries the adapter
+        // badge, undo/redo, six add buttons, three graph-file controls and the run scope.
+        flexWrap: 'wrap',
+        gap: '6px 8px',
         padding: 10,
         borderBottom: '1px solid rgba(255,255,255,0.1)',
         alignItems: 'center',
