@@ -19,6 +19,13 @@ export {
   topoSort,
   CycleError,
 } from './reducer/selectors';
+export { classifyRunNode, selectRunPlan, GENERATION_NODE_TYPES } from './reducer/runPlan';
+export type {
+  RunDisposition,
+  RunNodeClassification,
+  RunPlan,
+  RunPlanEntry,
+} from './reducer/runPlan';
 
 export { stableStringify, fnv1a32 } from './cache/hash';
 export { deriveCacheKey } from './cache/cacheKey';
